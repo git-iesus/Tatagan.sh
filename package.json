@@ -5,9 +5,9 @@
   "description": "Clone mobile-first do aplicativo Hevy Workout Tracker extraído via REA",
   "type": "module",
   "scripts": {
-    "dev": "vite --host",
-    "build": "tsc -b && vite build",
-    "preview": "vite preview --host"
+    "dev": "node ./node_modules/vite/bin/vite.js --host",
+    "build": "node ./node_modules/typescript/bin/tsc -b && node ./node_modules/vite/bin/vite.js build",
+    "preview": "node ./node_modules/vite/bin/vite.js preview --host"
   },
   "dependencies": {
     "lucide-react": "^0.475.0",
@@ -20,5 +20,8 @@
     "@vitejs/plugin-react": "^4.3.4",
     "typescript": "~5.7.2",
     "vite": "^6.1.0"
+  },
+  "allowScripts": {
+    "esbuild": true
   }
 }
