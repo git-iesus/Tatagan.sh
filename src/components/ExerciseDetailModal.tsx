@@ -313,7 +313,7 @@ export const ExerciseDetailModal: React.FC<ExerciseDetailModalProps> = ({
               style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
             >
               <h4 style={{ fontSize: 15, fontWeight: 700 }}>
-                Passo a Passo de Execução (Hevy Oficial)
+                Passo a Passo de Execução (Tatagan.sh)
               </h4>
               {instructionSteps.length > 0 ? (
                 instructionSteps.map((step: string, i: number) => (

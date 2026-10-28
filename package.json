@@ -1,8 +1,8 @@
 {
-  "name": "hevy-mobile-web",
+  "name": "tatagan-sh",
   "private": true,
   "version": "1.8.1",
-  "description": "Clone mobile-first do aplicativo Hevy Workout Tracker extraído via REA",
+  "description": "Tatagan.sh — Rastreador mobile-first de treinos, rotinas e relatórios semanais",
   "type": "module",
   "scripts": {
     "dev": "node ./node_modules/vite/bin/vite.js --host",

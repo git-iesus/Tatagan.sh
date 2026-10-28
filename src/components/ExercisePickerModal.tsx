@@ -67,7 +67,7 @@ export const ExercisePickerModal: React.FC<ExercisePickerModalProps> = ({
       video_url: null,
       video_url_female: null,
       thumbnail_url: null,
-      instructions: '1. Exercício personalizado criado no Hevy Mobile Clone.',
+      instructions: '1. Exercício personalizado criado no Tatagan.sh.',
     };
     if (onCreateCustomExercise) {
       onCreateCustomExercise(newEx);
@@ -96,7 +96,7 @@ export const ExercisePickerModal: React.FC<ExercisePickerModalProps> = ({
           <div>
             <h3 style={{ fontSize: 17, fontWeight: 700 }}>Adicionar Exercício</h3>
             <span style={{ fontSize: 12, color: 'var(--hevy-text-secondary)' }}>
-              {filtered.length} de {exercises.length} exercícios oficiais Hevy
+              {filtered.length} de {exercises.length} exercícios oficiais Tatagan.sh
             </span>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>

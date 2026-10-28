@@ -101,6 +101,7 @@ export interface CompletedWorkout {
   id: string;
   title: string;
   date: string;
+  timestamp: number;
   durationSeconds: number;
   volumeKg: number;
   totalSets: number;
@@ -130,9 +131,7 @@ export interface BodyMeasurement {
   thighsCm?: number;
 }
 
-export interface CoachMessage {
-  id: string;
-  sender: 'coach' | 'user';
-  text: string;
-  timestamp: string;
+export interface UserProfile {
+  username: string;
+  displayName: string;
 }

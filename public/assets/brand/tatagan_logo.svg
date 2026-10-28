@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" fill="none">
+  <rect width="120" height="120" rx="28" fill="#0B0C10"/>
+  <!-- Continuous monoline rounded-stroke 'T' following the exact Hevy dumbbell-hook aesthetic -->
+  <path
+    d="M 22 44
+       L 22 30
+       Q 22 18 36 18
+       L 84 18
+       Q 98 18 98 30
+       L 98 44
+       Q 98 54 88 54
+       L 74 54
+       Q 60 54 60 68
+       L 60 92
+       Q 60 102 50 102
+       L 44 102
+       Q 36 102 36 92
+       L 36 66"
+    stroke="#FFFFFF"
+    stroke-width="11.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>

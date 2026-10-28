@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Home,
   Dumbbell,
   Library,
   User,
-  Award,
+  Calendar,
   Plus,
   Play,
   Check,
@@ -19,14 +19,16 @@ import {
   Volume2,
   Sun,
   Moon,
-  Watch,
-  Sparkles,
   FolderPlus,
   Download,
+  Upload,
+  FileSpreadsheet,
   Scale,
   Link2,
   Info,
-  Send,
+  Edit3,
+  Flame,
+  TrendingUp,
 } from 'lucide-react';
 import exercisesRaw from './data/exercises.json';
 import {
@@ -37,13 +39,13 @@ import {
   WorkoutSet,
   SetType,
   BodyMeasurement,
-  CoachMessage,
+  UserProfile,
 } from './types';
 import {
   INITIAL_ROUTINES,
   INITIAL_WORKOUT_HISTORY,
   INITIAL_MEASUREMENTS,
-  INITIAL_COACH_MESSAGES,
+  INITIAL_USER_PROFILE,
 } from './data/initialData';
 import {
   MUSCLE_LABELS,
@@ -60,13 +62,14 @@ import {
   HevySoundName,
   TIMER_SOUND_OPTIONS,
 } from './utils/sound';
+import { TataganLogo } from './components/TataganLogo';
 import { MuscleHeatmap } from './components/MuscleHeatmap';
 import { PlateCalculatorModal } from './components/PlateCalculatorModal';
 import { ExerciseDetailModal } from './components/ExerciseDetailModal';
 import { ExercisePickerModal } from './components/ExercisePickerModal';
 import { WorkoutSummaryModal } from './components/WorkoutSummaryModal';
 
-type NavTab = 'feed' | 'workout' | 'coach' | 'exercises' | 'profile';
+type NavTab = 'feed' | 'workout' | 'week' | 'exercises' | 'profile';
 
 interface LiveWorkoutState {
   id: string;
@@ -76,14 +79,15 @@ interface LiveWorkoutState {
 }
 
 const STORAGE_KEYS = {
-  workouts: 'hevy_clone_workouts_v2',
-  routines: 'hevy_clone_routines_v2',
-  customExercises: 'hevy_clone_custom_exercises_v2',
-  measurements: 'hevy_clone_measurements_v2',
-  coachMessages: 'hevy_clone_coach_messages_v2',
-  activeWorkout: 'hevy_clone_active_workout_v2',
-  timerSound: 'hevy_clone_timer_sound_v2',
-  theme: 'hevy_clone_theme_v2',
+  workouts: 'tatagan_workouts_v3',
+  routines: 'tatagan_routines_v3',
+  customExercises: 'tatagan_custom_exercises_v3',
+  measurements: 'tatagan_measurements_v3',
+  userProfile: 'tatagan_user_profile_v3',
+  weekStartsOn: 'tatagan_week_starts_on_v3',
+  activeWorkout: 'tatagan_active_workout_v3',
+  timerSound: 'tatagan_timer_sound_v3',
+  theme: 'tatagan_theme_v3',
 };
 
 const SET_TYPE_CONFIG: Record<
@@ -118,10 +122,26 @@ const SET_TYPE_CONFIG: Record<
 
 const SET_TYPE_ORDER: SetType[] = ['normal', 'warmup', 'dropset', 'failure'];
 
+const MAJOR_MUSCLE_GROUPS: string[] = [
+  'chest',
+  'lats',
+  'upper_back',
+  'shoulders',
+  'biceps',
+  'triceps',
+  'quadriceps',
+  'hamstrings',
+  'glutes',
+  'calves',
+  'abdominals',
+];
+
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<NavTab>('workout');
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
-    return (localStorage.getItem(STORAGE_KEYS.theme) as 'dark' | 'light') || 'dark';
+    return (
+      (localStorage.getItem(STORAGE_KEYS.theme) as 'dark' | 'light') || 'dark'
+    );
   });
   const [timerSound, setTimerSound] = useState<HevySoundName>(() => {
     return (
@@ -129,10 +149,25 @@ export const App: React.FC = () => {
       'boxing_bell'
     );
   });
-  const [watchConnected, setWatchConnected] = useState(true);
-  const [watchHeartRate, setWatchHeartRate] = useState(118);
 
-  // Persistent Data
+  // Week Start Preference: 0 = Domingo, 1 = Segunda-feira
+  const [weekStartsOn, setWeekStartsOn] = useState<0 | 1>(() => {
+    const saved = localStorage.getItem(STORAGE_KEYS.weekStartsOn);
+    return saved === '0' ? 0 : 1;
+  });
+
+  // User Profile State
+  const [userProfile, setUserProfile] = useState<UserProfile>(() => {
+    const saved = localStorage.getItem(STORAGE_KEYS.userProfile);
+    return saved ? JSON.parse(saved) : INITIAL_USER_PROFILE;
+  });
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [draftDisplayName, setDraftDisplayName] = useState(
+    userProfile.displayName
+  );
+  const [draftUsername, setDraftUsername] = useState(userProfile.username);
+
+  // Persistent Data (Workouts start at 0 / empty array)
   const [customExercises, setCustomExercises] = useState<Exercise[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.customExercises);
     return saved ? JSON.parse(saved) : [];
@@ -153,17 +188,13 @@ export const App: React.FC = () => {
     return saved ? JSON.parse(saved) : INITIAL_MEASUREMENTS;
   });
 
-  const [coachMessages, setCoachMessages] = useState<CoachMessage[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.coachMessages);
-    return saved ? JSON.parse(saved) : INITIAL_COACH_MESSAGES;
-  });
-  const [coachInput, setCoachInput] = useState('');
-
   // Active Live Workout State
-  const [activeWorkout, setActiveWorkout] = useState<LiveWorkoutState | null>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.activeWorkout);
-    return saved ? JSON.parse(saved) : null;
-  });
+  const [activeWorkout, setActiveWorkout] = useState<LiveWorkoutState | null>(
+    () => {
+      const saved = localStorage.getItem(STORAGE_KEYS.activeWorkout);
+      return saved ? JSON.parse(saved) : null;
+    }
+  );
   const [workoutSheetExpanded, setWorkoutSheetExpanded] = useState(true);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
@@ -173,7 +204,9 @@ export const App: React.FC = () => {
 
   // Modals State
   const [inspectExercise, setInspectExercise] = useState<Exercise | null>(null);
-  const [pickerTarget, setPickerTarget] = useState<'active' | 'routine' | null>(null);
+  const [pickerTarget, setPickerTarget] = useState<'active' | 'routine' | null>(
+    null
+  );
   const [plateCalcTarget, setPlateCalcTarget] = useState<{
     exerciseInstanceId: string;
     initialWeight: number;
@@ -184,13 +217,18 @@ export const App: React.FC = () => {
   // Routine Builder Modal State
   const [buildingRoutine, setBuildingRoutine] = useState<Routine | null>(null);
 
+  // CSV File Input Ref
+  const csvInputRef = useRef<HTMLInputElement | null>(null);
+
   // Exercise Catalog Search State (Exercises Tab)
   const [catalogSearch, setCatalogSearch] = useState('');
   const [catalogMuscle, setCatalogMuscle] = useState('all');
   const [catalogEquipment, setCatalogEquipment] = useState('all');
 
   // Feed Comment Input State
-  const [commentInputs, setCommentInputs] = useState<Record<string, string>>({});
+  const [commentInputs, setCommentInputs] = useState<Record<string, string>>(
+    {}
+  );
 
   // Body Measurement Quick Input
   const [newWeightKg, setNewWeightKg] = useState('');
@@ -220,6 +258,14 @@ export const App: React.FC = () => {
   }, [timerSound]);
 
   useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.weekStartsOn, String(weekStartsOn));
+  }, [weekStartsOn]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.userProfile, JSON.stringify(userProfile));
+  }, [userProfile]);
+
+  useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.workouts, JSON.stringify(workouts));
   }, [workouts]);
 
@@ -235,15 +281,11 @@ export const App: React.FC = () => {
   }, [customExercises]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.measurements, JSON.stringify(measurements));
-  }, [measurements]);
-
-  useEffect(() => {
     localStorage.setItem(
-      STORAGE_KEYS.coachMessages,
-      JSON.stringify(coachMessages)
+      STORAGE_KEYS.measurements,
+      JSON.stringify(measurements)
     );
-  }, [coachMessages]);
+  }, [measurements]);
 
   useEffect(() => {
     if (activeWorkout) {
@@ -256,7 +298,7 @@ export const App: React.FC = () => {
     }
   }, [activeWorkout]);
 
-  // Live Workout Elapsed Timer & Simulated Apple Watch / WearOS BPM
+  // Live Workout Elapsed Timer
   useEffect(() => {
     if (!activeWorkout) {
       setElapsedSeconds(0);
@@ -268,10 +310,6 @@ export const App: React.FC = () => {
         Math.floor((Date.now() - activeWorkout.startTime) / 1000)
       );
       setElapsedSeconds(diff);
-      setWatchHeartRate((hr) => {
-        const delta = Math.floor(Math.random() * 5) - 2;
-        return Math.min(168, Math.max(98, hr + delta));
-      });
     };
     updateElapsed();
     const interval = window.setInterval(updateElapsed, 1000);
@@ -292,6 +330,15 @@ export const App: React.FC = () => {
     }, 1000);
     return () => clearInterval(timer);
   }, [restRemaining, timerSound]);
+
+  // Helper to get user initials
+  const getUserInitials = (name: string) => {
+    const parts = name.trim().split(/\s+/);
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    }
+    return name.slice(0, 2).toUpperCase() || 'TT';
+  };
 
   // Helper to get previous best/recent weight & reps for an exercise
   const getPreviousSetReference = (
@@ -326,7 +373,7 @@ export const App: React.FC = () => {
 
     const session: LiveWorkoutState = {
       id: `session-${Date.now()}`,
-      title: routine ? routine.title : 'Treino Livre Hevy',
+      title: routine ? routine.title : 'Treino Livre Tatagan.sh',
       startTime: Date.now(),
       exercises: clonedExercises,
     };
@@ -547,24 +594,33 @@ export const App: React.FC = () => {
       }
     });
 
+    const now = Date.now();
+    const formattedDate = new Date(now).toLocaleDateString('pt-BR', {
+      day: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
     const totalVolume = calculateExercisesVolume(activeWorkout.exercises);
     const finalized: CompletedWorkout = {
       id: activeWorkout.id,
       title: activeWorkout.title,
-      date: 'Agora mesmo',
+      date: formattedDate,
+      timestamp: now,
       durationSeconds: Math.max(60, elapsedSeconds),
       volumeKg: totalVolume,
       totalSets: completedSetsCount,
-      prCount: Math.max(1, prs),
-      likes: 1,
-      likedByMe: true,
+      prCount: prs,
+      likes: 0,
+      likedByMe: false,
       comments: [],
       user: {
-        username: 'iesus_candido',
-        displayName: 'Iesus Candido',
-        avatar: 'IC',
+        username: userProfile.username,
+        displayName: userProfile.displayName,
+        avatar: getUserInitials(userProfile.displayName),
         isPro: true,
-        gymName: 'Hevy Mobile Web',
+        gymName: 'Tatagan.sh',
       },
       exercises: activeWorkout.exercises,
     };
@@ -574,6 +630,246 @@ export const App: React.FC = () => {
     setRestRemaining(0);
     setCompletedSummary(finalized);
     setActiveTab('feed');
+  };
+
+  // Delete a workout post from history
+  const handleDeleteWorkoutPost = (workoutId: string) => {
+    setWorkouts((prev) => prev.filter((w) => w.id !== workoutId));
+  };
+
+  // ==================== CSV TEMPLATE DOWNLOAD (BUTTON A) & IMPORT (BUTTON B) ====================
+  const handleDownloadCsvTemplate = () => {
+    const csvRows = [
+      'nome_rotina;exercicio;tipo_serie;peso_kg;repeticoes;descanso_seg;notas',
+      'Treino A - Superior;Supino Reto (Barra);warmup;40;12;90;Aquecimento articular controlado',
+      'Treino A - Superior;Supino Reto (Barra);normal;80;10;120;Série principal',
+      'Treino A - Superior;Supino Reto (Barra);normal;85;8;120;Progressão de carga',
+      'Treino A - Superior;Puxada Alta (Cabo);normal;65;10;90;Pegada aberta pronada',
+      'Treino A - Superior;Puxada Alta (Cabo);normal;70;8;90;Segurar 1s na contração',
+      'Treino A - Superior;Desenvolvimento (Halter);normal;24;10;90;Core firme',
+      'Treino A - Superior;Elevação Lateral (Halter);dropset;12;15;60;Até a falha técnica',
+    ];
+    // UTF-8 BOM (\uFEFF) ensures Microsoft Excel opens accents and columns properly
+    const blob = new Blob(['\uFEFF' + csvRows.join('\r\n')], {
+      type: 'text/csv;charset=utf-8;',
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'modelo_rotina_tatagan.csv';
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImportCsvFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const content = String(e.target?.result || '');
+      const lines = content
+        .replace(/^\uFEFF/, '')
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean);
+
+      if (lines.length < 2) {
+        alert(
+          'A planilha está vazia ou não possui linhas de exercícios preenchidas.'
+        );
+        return;
+      }
+
+      // Auto-detect delimiter (`;` for PT-BR Excel or `,` for standard CSV)
+      const headerLine = lines[0];
+      const delimiter =
+        headerLine.split(';').length >= headerLine.split(',').length ? ';' : ',';
+
+      const parseRow = (line: string): string[] => {
+        const result: string[] = [];
+        let current = '';
+        let inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+          const ch = line[i];
+          if (ch === '"') {
+            inQuotes = !inQuotes;
+          } else if (ch === delimiter && !inQuotes) {
+            result.push(current.trim());
+            current = '';
+          } else {
+            current += ch;
+          }
+        }
+        result.push(current.trim());
+        return result;
+      };
+
+      const headers = parseRow(headerLine).map((h) =>
+        h
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^a-z0-9_]/g, '')
+      );
+
+      const idxRoutine = headers.findIndex(
+        (h) => h.includes('rotina') || h.includes('routine') || h.includes('treino')
+      );
+      const idxExercise = headers.findIndex(
+        (h) => h.includes('exercicio') || h.includes('exercise')
+      );
+      const idxType = headers.findIndex(
+        (h) => h.includes('tipo') || h.includes('type')
+      );
+      const idxWeight = headers.findIndex(
+        (h) => h.includes('peso') || h.includes('weight') || h.includes('kg')
+      );
+      const idxReps = headers.findIndex(
+        (h) => h.includes('rep') || h.includes('repeticoes')
+      );
+      const idxRest = headers.findIndex(
+        (h) => h.includes('descanso') || h.includes('rest') || h.includes('seg')
+      );
+      const idxNotes = headers.findIndex(
+        (h) => h.includes('nota') || h.includes('obs') || h.includes('note')
+      );
+
+      const normalizeText = (s: string) =>
+        s
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .trim();
+
+      const routinesMap = new Map<string, Map<string, WorkoutExercise>>();
+      const newlyCreatedExercises: Exercise[] = [];
+
+      for (let i = 1; i < lines.length; i++) {
+        const cols = parseRow(lines[i]);
+        const routineTitle =
+          (idxRoutine >= 0 ? cols[idxRoutine] : cols[0])?.trim() ||
+          `Rotina Importada CSV`;
+        const exerciseName = (
+          idxExercise >= 0 ? cols[idxExercise] : cols[1]
+        )?.trim();
+        if (!exerciseName) continue;
+
+        const rawType = normalizeText(
+          (idxType >= 0 ? cols[idxType] : cols[2]) || 'normal'
+        );
+        let setType: SetType = 'normal';
+        if (rawType.startsWith('w') || rawType.includes('aquec')) {
+          setType = 'warmup';
+        } else if (rawType.startsWith('d') || rawType.includes('drop')) {
+          setType = 'dropset';
+        } else if (rawType.startsWith('f') || rawType.includes('falha')) {
+          setType = 'failure';
+        }
+
+        const rawWeight = (idxWeight >= 0 ? cols[idxWeight] : cols[3]) || '0';
+        const weightKg =
+          parseFloat(rawWeight.replace(',', '.')) || 0;
+        const rawReps = (idxReps >= 0 ? cols[idxReps] : cols[4]) || '10';
+        const reps = parseInt(rawReps, 10) || 10;
+        const rawRest = (idxRest >= 0 ? cols[idxRest] : cols[5]) || '90';
+        const restSeconds = parseInt(rawRest, 10) || 90;
+        const notes = (idxNotes >= 0 ? cols[idxNotes] : cols[6]) || '';
+
+        // Match exercise in catalog or newly created custom exercises
+        const targetNorm = normalizeText(exerciseName);
+        let matchedExercise =
+          allExercises.find(
+            (ex) =>
+              normalizeText(ex.title) === targetNorm ||
+              normalizeText(ex.title_en) === targetNorm ||
+              ex.id.toLowerCase() === targetNorm
+          ) ||
+          allExercises.find(
+            (ex) =>
+              normalizeText(ex.title).includes(targetNorm) ||
+              targetNorm.includes(normalizeText(ex.title))
+          ) ||
+          newlyCreatedExercises.find(
+            (ex) => normalizeText(ex.title) === targetNorm
+          );
+
+        if (!matchedExercise) {
+          matchedExercise = {
+            id: `csv-custom-${Date.now()}-${i}`,
+            title: exerciseName,
+            title_en: exerciseName,
+            priority: 5,
+            muscle_group: 'full_body',
+            exercise_type: 'weight_reps',
+            equipment: 'other',
+            video_url: null,
+            thumbnail_url: null,
+            instructions: '1. Exercício importado via planilha CSV no Tatagan.sh.',
+          };
+          newlyCreatedExercises.push(matchedExercise);
+        }
+
+        if (!routinesMap.has(routineTitle)) {
+          routinesMap.set(routineTitle, new Map());
+        }
+        const exGroup = routinesMap.get(routineTitle)!;
+
+        if (!exGroup.has(matchedExercise.id)) {
+          exGroup.set(matchedExercise.id, {
+            id: `csv-we-${Date.now()}-${i}`,
+            exerciseId: matchedExercise.id,
+            notes,
+            restTimerSeconds: restSeconds,
+            supersetGroup: null,
+            sets: [],
+          });
+        }
+
+        const we = exGroup.get(matchedExercise.id)!;
+        if (notes && !we.notes) {
+          we.notes = notes;
+        }
+        we.sets.push({
+          id: `csv-set-${Date.now()}-${i}-${we.sets.length}`,
+          type: setType,
+          weightKg,
+          reps,
+          completed: false,
+        });
+      }
+
+      if (newlyCreatedExercises.length > 0) {
+        setCustomExercises((prev) => [...newlyCreatedExercises, ...prev]);
+      }
+
+      const importedRoutines: Routine[] = [];
+      routinesMap.forEach((exGroup, title) => {
+        const exList = Array.from(exGroup.values());
+        if (exList.length > 0) {
+          importedRoutines.push({
+            id: `routine-csv-${Date.now()}-${importedRoutines.length}`,
+            title,
+            folderId: 'folder-csv',
+            lastPerformed: 'Importada via CSV',
+            exercises: exList,
+          });
+        }
+      });
+
+      if (importedRoutines.length === 0) {
+        alert('Nenhuma rotina válida pôde ser lida do arquivo CSV.');
+        return;
+      }
+
+      setRoutines((prev) => [...importedRoutines, ...prev]);
+      alert(
+        `✅ ${importedRoutines.length} rotina(s) importada(s) com sucesso para o Tatagan.sh!`
+      );
+    };
+
+    reader.readAsText(file, 'utf-8');
+    event.target.value = '';
   };
 
   // Filtered Exercises for the Exercises Tab
@@ -593,7 +889,7 @@ export const App: React.FC = () => {
     });
   }, [allExercises, catalogSearch, catalogMuscle, catalogEquipment]);
 
-  // Overall Profile Statistics
+  // Factual Lifetime Profile Statistics (Starts at 0!)
   const lifetimeStats = useMemo(() => {
     const totalVolume = workouts.reduce(
       (acc: number, w: CompletedWorkout) =>
@@ -612,7 +908,8 @@ export const App: React.FC = () => {
       allWorkoutExercises,
       exerciseMap
     );
-    const equivalence = getVolumeComparison(totalVolume);
+    const equivalence =
+      totalVolume > 0 ? getVolumeComparison(totalVolume) : null;
     return {
       totalVolume,
       totalSets,
@@ -621,59 +918,125 @@ export const App: React.FC = () => {
     };
   }, [workouts, exerciseMap]);
 
+  // ==================== WEEK TAB ANALYTICS ====================
+  const weeklyReport = useMemo(() => {
+    const now = new Date();
+    const currentDay = now.getDay(); // 0 (Sun) to 6 (Sat)
+    const diffToStart = (currentDay - weekStartsOn + 7) % 7;
+
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(now.getDate() - diffToStart);
+    startOfWeek.setHours(0, 0, 0, 0);
+
+    const endOfWeek = new Date(startOfWeek);
+    endOfWeek.setDate(startOfWeek.getDate() + 6);
+    endOfWeek.setHours(23, 59, 59, 999);
+
+    const weekWorkouts = workouts.filter((w) => {
+      const ts = w.timestamp || 0;
+      return ts >= startOfWeek.getTime() && ts <= endOfWeek.getTime();
+    });
+
+    const weekVolume = weekWorkouts.reduce(
+      (acc, w) => acc + (w.volumeKg || calculateExercisesVolume(w.exercises)),
+      0
+    );
+    const weekSets = weekWorkouts.reduce(
+      (acc, w) =>
+        acc + (w.totalSets || calculateExercisesCompletedSets(w.exercises)),
+      0
+    );
+    const weekDuration = weekWorkouts.reduce(
+      (acc, w) => acc + w.durationSeconds,
+      0
+    );
+    const weekPRs = weekWorkouts.reduce((acc, w) => acc + w.prCount, 0);
+
+    const weekExercises = weekWorkouts.flatMap((w) => w.exercises);
+    const weekMuscleCounts = computeMuscleDistributionFromExercises(
+      weekExercises,
+      exerciseMap
+    );
+
+    // Compute volume per muscle group for detailed physique report
+    const weekMuscleVolume: Record<string, number> = {};
+    weekExercises.forEach((ex) => {
+      const meta = exerciseMap[ex.exerciseId];
+      if (!meta) return;
+      const m = meta.muscle_group;
+      const v = ex.sets.reduce(
+        (sAcc, s) =>
+          s.completed ? sAcc + (s.weightKg || 0) * (s.reps || 0) : sAcc,
+        0
+      );
+      weekMuscleVolume[m] = (weekMuscleVolume[m] || 0) + v;
+    });
+
+    // Build 7-day breakdown array
+    const dayLabelsSun = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+    const days = Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(startOfWeek);
+      d.setDate(startOfWeek.getDate() + i);
+      const dayStart = new Date(d);
+      dayStart.setHours(0, 0, 0, 0);
+      const dayEnd = new Date(d);
+      dayEnd.setHours(23, 59, 59, 999);
+
+      const dayWorkouts = weekWorkouts.filter(
+        (w) =>
+          (w.timestamp || 0) >= dayStart.getTime() &&
+          (w.timestamp || 0) <= dayEnd.getTime()
+      );
+      const dayVol = dayWorkouts.reduce(
+        (acc, w) => acc + (w.volumeKg || calculateExercisesVolume(w.exercises)),
+        0
+      );
+      const isToday = d.toDateString() === now.toDateString();
+
+      return {
+        label: dayLabelsSun[d.getDay()],
+        dateNum: d.getDate(),
+        workoutsCount: dayWorkouts.length,
+        volumeKg: dayVol,
+        isToday,
+      };
+    });
+
+    const untrainedMuscles = MAJOR_MUSCLE_GROUPS.filter(
+      (m) => !weekMuscleCounts[m] || weekMuscleCounts[m] === 0
+    );
+
+    const rangeLabel = `${startOfWeek.toLocaleDateString('pt-BR', {
+      day: '2-digit',
+      month: 'short',
+    })} — ${endOfWeek.toLocaleDateString('pt-BR', {
+      day: '2-digit',
+      month: 'short',
+    })}`;
+
+    return {
+      rangeLabel,
+      weekWorkouts,
+      weekVolume,
+      weekSets,
+      weekDuration,
+      weekPRs,
+      weekMuscleCounts,
+      weekMuscleVolume,
+      days,
+      untrainedMuscles,
+      equivalence: weekVolume > 0 ? getVolumeComparison(weekVolume) : null,
+    };
+  }, [workouts, weekStartsOn, exerciseMap]);
+
   return (
     <div className="hevy-viewport-wrapper">
       <div className="hevy-mobile-shell">
         {/* TOP HEADER */}
         <header className="hevy-header">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <img
-              src={
-                theme === 'dark'
-                  ? '/assets/brand/hevy_logo_name_white.png'
-                  : '/assets/brand/hevy_logo_name.png'
-              }
-              alt="Hevy"
-              style={{ height: 22, objectFit: 'contain' }}
-            />
-            <img
-              src="/assets/brand/pro_badge.png"
-              alt="PRO"
-              style={{ height: 16, objectFit: 'contain' }}
-            />
-          </div>
+          <TataganLogo theme={theme} size={26} />
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {/* Smartwatch Sync Pill */}
-            <button
-              type="button"
-              onClick={() => setWatchConnected((v) => !v)}
-              title="Sincronização em Tempo Real WatchOS / WearOS"
-              style={{
-                border: '1px solid var(--hevy-border)',
-                background: watchConnected
-                  ? 'rgba(42, 204, 88, 0.14)'
-                  : 'var(--hevy-elevated)',
-                color: watchConnected
-                  ? 'var(--hevy-green)'
-                  : 'var(--hevy-text-muted)',
-                borderRadius: 999,
-                padding: '5px 10px',
-                fontSize: 11,
-                fontWeight: 700,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 5,
-              }}
-            >
-              <Watch size={13} />
-              {watchConnected
-                ? activeWorkout
-                  ? `${watchHeartRate} BPM`
-                  : 'Watch Sync'
-                : 'Watch Off'}
-            </button>
-
             {/* Sound Selector */}
             <button
               type="button"
@@ -686,7 +1049,7 @@ export const App: React.FC = () => {
                 setTimerSound(next.id);
                 playHevySound(next.id);
               }}
-              title="Trocar som oficial do Timer Hevy"
+              title="Trocar som do Timer Tatagan.sh"
               style={{
                 border: '1px solid var(--hevy-border)',
                 background: 'var(--hevy-elevated)',
@@ -726,7 +1089,7 @@ export const App: React.FC = () => {
 
         {/* MAIN SCROLLABLE VIEWPORT */}
         <main className="hevy-scroll-area">
-          {/* ==================== TAB 1: SOCIAL FEED ==================== */}
+          {/* ==================== TAB 1: INÍCIO (HISTÓRICO DE POSTS DO USUÁRIO) ==================== */}
           {activeTab === 'feed' && (
             <div
               style={{
@@ -749,16 +1112,20 @@ export const App: React.FC = () => {
                 <div>
                   <div
                     style={{
-                      fontSize: 12,
+                      fontSize: 11,
                       fontWeight: 700,
                       color: 'var(--hevy-blue)',
+                      textTransform: 'uppercase',
                     }}
                   >
-                    COMUNIDADE HEVY & HISTÓRICO
+                    MEU HISTÓRICO • TATAGAN.SH
                   </div>
                   <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>
-                    {workouts.length} treinos registrados •{' '}
-                    {lifetimeStats.totalVolume.toLocaleString('pt-BR')} kg
+                    {workouts.length}{' '}
+                    {workouts.length === 1
+                      ? 'treino realizado'
+                      : 'treinos realizados'}{' '}
+                    • {lifetimeStats.totalVolume.toLocaleString('pt-BR')} kg
                   </div>
                 </div>
                 <button
@@ -771,457 +1138,558 @@ export const App: React.FC = () => {
                 </button>
               </div>
 
-              {workouts.map((w: CompletedWorkout) => {
-                const vol =
-                  w.volumeKg || calculateExercisesVolume(w.exercises);
-                const setsCount =
-                  w.totalSets || calculateExercisesCompletedSets(w.exercises);
-                const workoutMuscles = computeMuscleDistributionFromExercises(
-                  w.exercises,
-                  exerciseMap
-                );
-                const eq = getVolumeComparison(vol);
-
-                return (
-                  <article
-                    key={w.id}
-                    className="hevy-card"
-                    style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
+              {workouts.length === 0 ? (
+                <div
+                  className="hevy-card"
+                  style={{
+                    padding: '32px 18px',
+                    textAlign: 'center',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: 12,
+                  }}
+                >
+                  <div
+                    style={{
+                      width: 56,
+                      height: 56,
+                      borderRadius: '50%',
+                      backgroundColor: 'var(--hevy-blue-soft)',
+                      color: 'var(--hevy-blue)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
                   >
-                    {/* Author Row */}
-                    <div
+                    <Dumbbell size={26} />
+                  </div>
+                  <h3 style={{ fontSize: 17, fontWeight: 700 }}>
+                    Seu histórico está zerado
+                  </h3>
+                  <p
+                    style={{
+                      fontSize: 13,
+                      color: 'var(--hevy-text-secondary)',
+                      maxWidth: 300,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    Cada treino que você finalizar no <strong>Tatagan.sh</strong>{' '}
+                    será publicado aqui em formato de post com mapa muscular,
+                    volume e recordes.
+                  </p>
+                  <button
+                    type="button"
+                    className="hevy-btn-primary"
+                    style={{ marginTop: 4 }}
+                    onClick={() => setActiveTab('workout')}
+                  >
+                    <Play size={15} /> Iniciar Meu Primeiro Treino
+                  </button>
+                </div>
+              ) : (
+                workouts.map((w: CompletedWorkout) => {
+                  const vol =
+                    w.volumeKg || calculateExercisesVolume(w.exercises);
+                  const setsCount =
+                    w.totalSets || calculateExercisesCompletedSets(w.exercises);
+                  const workoutMuscles = computeMuscleDistributionFromExercises(
+                    w.exercises,
+                    exerciseMap
+                  );
+                  const eq = vol > 0 ? getVolumeComparison(vol) : null;
+
+                  return (
+                    <article
+                      key={w.id}
+                      className="hevy-card"
                       style={{
                         display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
+                        flexDirection: 'column',
+                        gap: 12,
                       }}
                     >
+                      {/* Post Header with Author, Repeat & Trash Delete Icon */}
                       <div
-                        style={{ display: 'flex', alignItems: 'center', gap: 10 }}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          gap: 8,
+                        }}
                       >
                         <div
                           style={{
-                            width: 38,
-                            height: 38,
-                            borderRadius: '50%',
-                            background:
-                              'linear-gradient(135deg, #008CFF, #0051A8)',
                             display: 'flex',
                             alignItems: 'center',
-                            justifyContent: 'center',
-                            fontWeight: 700,
-                            fontSize: 14,
-                            color: '#FFF',
+                            gap: 10,
                           }}
                         >
-                          {w.user.avatar}
-                        </div>
-                        <div>
-                          <div style={{ fontWeight: 700, fontSize: 14 }}>
-                            {w.user.displayName}
-                          </div>
                           <div
                             style={{
-                              fontSize: 11,
-                              color: 'var(--hevy-text-muted)',
-                            }}
-                          >
-                            @{w.user.username} • {w.date}
-                          </div>
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        className="hevy-btn-secondary"
-                        style={{ padding: '6px 10px', fontSize: 11 }}
-                        onClick={() =>
-                          startWorkout({
-                            id: `from-feed-${w.id}`,
-                            title: w.title,
-                            folderId: 'folder-ppl',
-                            exercises: w.exercises,
-                          })
-                        }
-                      >
-                        <Play size={12} /> Repetir Treino
-                      </button>
-                    </div>
-
-                    {/* Workout Title & Metrics */}
-                    <div>
-                      <h3 style={{ fontSize: 17, fontWeight: 700 }}>{w.title}</h3>
-                      {w.notes && (
-                        <p
-                          style={{
-                            fontSize: 13,
-                            color: 'var(--hevy-text-secondary)',
-                            marginTop: 4,
-                          }}
-                        >
-                          {w.notes}
-                        </p>
-                      )}
-                      <div
-                        style={{
-                          display: 'grid',
-                          gridTemplateColumns: 'repeat(3, 1fr)',
-                          gap: 8,
-                          marginTop: 10,
-                          padding: '10px 12px',
-                          borderRadius: 10,
-                          backgroundColor: 'var(--hevy-elevated)',
-                        }}
-                      >
-                        <div>
-                          <div
-                            style={{
-                              fontSize: 10,
-                              color: 'var(--hevy-text-muted)',
-                              fontWeight: 600,
-                            }}
-                          >
-                            TEMPO
-                          </div>
-                          <div
-                            style={{ fontSize: 14, fontWeight: 700, marginTop: 2 }}
-                          >
-                            {formatDuration(w.durationSeconds)}
-                          </div>
-                        </div>
-                        <div>
-                          <div
-                            style={{
-                              fontSize: 10,
-                              color: 'var(--hevy-text-muted)',
-                              fontWeight: 600,
-                            }}
-                          >
-                            VOLUME ({setsCount} séries)
-                          </div>
-                          <div
-                            style={{
-                              fontSize: 14,
-                              fontWeight: 700,
-                              color: 'var(--hevy-blue)',
-                              marginTop: 2,
-                            }}
-                          >
-                            {vol.toLocaleString('pt-BR')} kg
-                          </div>
-                        </div>
-                        <div>
-                          <div
-                            style={{
-                              fontSize: 10,
-                              color: 'var(--hevy-text-muted)',
-                              fontWeight: 600,
-                            }}
-                          >
-                            RECORDES
-                          </div>
-                          <div
-                            style={{
-                              fontSize: 14,
-                              fontWeight: 700,
-                              color: 'var(--hevy-gold)',
-                              marginTop: 2,
-                            }}
-                          >
-                            🏆 {w.prCount} PRs
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Exercise Summary List */}
-                    <div
-                      style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
-                    >
-                      {w.exercises.map((we: WorkoutExercise) => {
-                        const meta = exerciseMap[we.exerciseId];
-                        if (!meta) return null;
-                        const completedSets = we.sets.filter(
-                          (s: WorkoutSet) => s.completed
-                        );
-                        const bestSet = completedSets.reduce(
-                          (best: WorkoutSet | undefined, cur: WorkoutSet) =>
-                            (cur.weightKg || 0) > (best?.weightKg || 0)
-                              ? cur
-                              : best,
-                          completedSets[0]
-                        );
-                        return (
-                          <div
-                            key={we.id}
-                            onClick={() => setInspectExercise(meta)}
-                            style={{
+                              width: 38,
+                              height: 38,
+                              borderRadius: '50%',
+                              background:
+                                'linear-gradient(135deg, #008CFF, #0051A8)',
                               display: 'flex',
                               alignItems: 'center',
-                              justifyContent: 'space-between',
-                              gap: 10,
-                              cursor: 'pointer',
-                              padding: '4px 0',
+                              justifyContent: 'center',
+                              fontWeight: 700,
+                              fontSize: 14,
+                              color: '#FFF',
                             }}
                           >
+                            {getUserInitials(userProfile.displayName)}
+                          </div>
+                          <div>
+                            <div style={{ fontWeight: 700, fontSize: 14 }}>
+                              {userProfile.displayName}
+                            </div>
                             <div
+                              style={{
+                                fontSize: 11,
+                                color: 'var(--hevy-text-muted)',
+                              }}
+                            >
+                              @{userProfile.username} • {w.date}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <button
+                            type="button"
+                            className="hevy-btn-secondary"
+                            style={{ padding: '6px 10px', fontSize: 11 }}
+                            onClick={() =>
+                              startWorkout({
+                                id: `from-feed-${w.id}`,
+                                title: w.title,
+                                folderId: 'folder-ppl',
+                                exercises: w.exercises,
+                              })
+                            }
+                          >
+                            <Play size={12} /> Repetir
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteWorkoutPost(w.id)}
+                            title="Excluir post do histórico"
+                            style={{
+                              background: 'var(--hevy-red-soft)',
+                              color: 'var(--hevy-red)',
+                              border: '1px solid rgba(255, 75, 75, 0.28)',
+                              borderRadius: 8,
+                              width: 32,
+                              height: 32,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                            }}
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Workout Title & Metrics */}
+                      <div>
+                        <h3 style={{ fontSize: 17, fontWeight: 700 }}>
+                          {w.title}
+                        </h3>
+                        {w.notes && (
+                          <p
+                            style={{
+                              fontSize: 13,
+                              color: 'var(--hevy-text-secondary)',
+                              marginTop: 4,
+                            }}
+                          >
+                            {w.notes}
+                          </p>
+                        )}
+                        <div
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(3, 1fr)',
+                            gap: 8,
+                            marginTop: 10,
+                            padding: '10px 12px',
+                            borderRadius: 10,
+                            backgroundColor: 'var(--hevy-elevated)',
+                          }}
+                        >
+                          <div>
+                            <div
+                              style={{
+                                fontSize: 10,
+                                color: 'var(--hevy-text-muted)',
+                                fontWeight: 600,
+                              }}
+                            >
+                              TEMPO
+                            </div>
+                            <div
+                              style={{
+                                fontSize: 14,
+                                fontWeight: 700,
+                                marginTop: 2,
+                              }}
+                            >
+                              {formatDuration(w.durationSeconds)}
+                            </div>
+                          </div>
+                          <div>
+                            <div
+                              style={{
+                                fontSize: 10,
+                                color: 'var(--hevy-text-muted)',
+                                fontWeight: 600,
+                              }}
+                            >
+                              VOLUME ({setsCount} séries)
+                            </div>
+                            <div
+                              style={{
+                                fontSize: 14,
+                                fontWeight: 700,
+                                color: 'var(--hevy-blue)',
+                                marginTop: 2,
+                              }}
+                            >
+                              {vol.toLocaleString('pt-BR')} kg
+                            </div>
+                          </div>
+                          <div>
+                            <div
+                              style={{
+                                fontSize: 10,
+                                color: 'var(--hevy-text-muted)',
+                                fontWeight: 600,
+                              }}
+                            >
+                              RECORDES
+                            </div>
+                            <div
+                              style={{
+                                fontSize: 14,
+                                fontWeight: 700,
+                                color: 'var(--hevy-gold)',
+                                marginTop: 2,
+                              }}
+                            >
+                              🏆 {w.prCount} PRs
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Exercise Summary List */}
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 8,
+                        }}
+                      >
+                        {w.exercises.map((we: WorkoutExercise) => {
+                          const meta = exerciseMap[we.exerciseId];
+                          if (!meta) return null;
+                          const completedSets = we.sets.filter(
+                            (s: WorkoutSet) => s.completed
+                          );
+                          const bestSet = completedSets.reduce(
+                            (best: WorkoutSet | undefined, cur: WorkoutSet) =>
+                              (cur.weightKg || 0) > (best?.weightKg || 0)
+                                ? cur
+                                : best,
+                            completedSets[0]
+                          );
+                          return (
+                            <div
+                              key={we.id}
+                              onClick={() => setInspectExercise(meta)}
                               style={{
                                 display: 'flex',
                                 alignItems: 'center',
+                                justifyContent: 'space-between',
                                 gap: 10,
-                                minWidth: 0,
+                                cursor: 'pointer',
+                                padding: '4px 0',
                               }}
                             >
-                              {meta.thumbnail_url ? (
-                                <img
-                                  src={meta.thumbnail_url}
-                                  alt={meta.title}
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 10,
+                                  minWidth: 0,
+                                }}
+                              >
+                                {meta.thumbnail_url ? (
+                                  <img
+                                    src={meta.thumbnail_url}
+                                    alt={meta.title}
+                                    style={{
+                                      width: 36,
+                                      height: 36,
+                                      borderRadius: 8,
+                                      objectFit: 'cover',
+                                      backgroundColor: '#FFF',
+                                      flexShrink: 0,
+                                    }}
+                                  />
+                                ) : (
+                                  <div
+                                    style={{
+                                      width: 36,
+                                      height: 36,
+                                      borderRadius: 8,
+                                      backgroundColor: 'var(--hevy-elevated)',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      fontWeight: 700,
+                                      fontSize: 12,
+                                    }}
+                                  >
+                                    {completedSets.length}x
+                                  </div>
+                                )}
+                                <span
                                   style={{
-                                    width: 36,
-                                    height: 36,
-                                    borderRadius: 8,
-                                    objectFit: 'cover',
-                                    backgroundColor: '#FFF',
-                                    flexShrink: 0,
-                                  }}
-                                />
-                              ) : (
-                                <div
-                                  style={{
-                                    width: 36,
-                                    height: 36,
-                                    borderRadius: 8,
-                                    backgroundColor: 'var(--hevy-elevated)',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    fontWeight: 700,
-                                    fontSize: 12,
+                                    fontSize: 13,
+                                    fontWeight: 600,
+                                    whiteSpace: 'nowrap',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
                                   }}
                                 >
-                                  {completedSets.length}x
-                                </div>
+                                  {completedSets.length} séries • {meta.title}
+                                </span>
+                              </div>
+                              {bestSet && (
+                                <span
+                                  style={{
+                                    fontSize: 12,
+                                    fontWeight: 700,
+                                    color: 'var(--hevy-text-secondary)',
+                                    flexShrink: 0,
+                                  }}
+                                >
+                                  Melhor: {bestSet.weightKg} kg × {bestSet.reps}
+                                </span>
                               )}
-                              <span
-                                style={{
-                                  fontSize: 13,
-                                  fontWeight: 600,
-                                  whiteSpace: 'nowrap',
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
-                                }}
-                              >
-                                {completedSets.length} séries • {meta.title}
-                              </span>
                             </div>
-                            {bestSet && (
-                              <span
-                                style={{
-                                  fontSize: 12,
-                                  fontWeight: 700,
-                                  color: 'var(--hevy-text-secondary)',
-                                  flexShrink: 0,
-                                }}
-                              >
-                                Melhor: {bestSet.weightKg} kg × {bestSet.reps}
-                              </span>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
+                          );
+                        })}
+                      </div>
 
-                    {/* Volume Badge Strip */}
-                    <div
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        padding: '8px 12px',
-                        borderRadius: 10,
-                        backgroundColor: 'rgba(0, 140, 255, 0.08)',
-                        border: '1px solid rgba(0, 140, 255, 0.2)',
-                      }}
-                    >
-                      <span style={{ fontSize: 12, fontWeight: 600 }}>
-                        Equivalente a levantar {eq.article}{' '}
-                        <strong>{eq.name}</strong>!
-                      </span>
-                      <img
-                        src={eq.asset}
-                        alt={eq.name}
-                        style={{ height: 32, width: 48, objectFit: 'contain' }}
+                      {/* Volume Badge Strip */}
+                      {eq && (
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            padding: '8px 12px',
+                            borderRadius: 10,
+                            backgroundColor: 'rgba(0, 140, 255, 0.08)',
+                            border: '1px solid rgba(0, 140, 255, 0.2)',
+                          }}
+                        >
+                          <span style={{ fontSize: 12, fontWeight: 600 }}>
+                            Equivalente a levantar {eq.article}{' '}
+                            <strong>{eq.name}</strong>!
+                          </span>
+                          <img
+                            src={eq.asset}
+                            alt={eq.name}
+                            style={{
+                              height: 32,
+                              width: 48,
+                              objectFit: 'contain',
+                            }}
+                          />
+                        </div>
+                      )}
+
+                      {/* Compact Anatomical Heatmap */}
+                      <MuscleHeatmap
+                        muscleCounts={workoutMuscles}
+                        compact
+                        showLegend={false}
                       />
-                    </div>
 
-                    {/* Compact Anatomical Heatmap */}
-                    <MuscleHeatmap
-                      muscleCounts={workoutMuscles}
-                      compact
-                      showLegend={false}
-                    />
+                      {/* Post Actions (Like, Notes/Comment, Share) */}
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          paddingTop: 8,
+                          borderTop: '1px solid var(--hevy-border)',
+                        }}
+                      >
+                        <div style={{ display: 'flex', gap: 14 }}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setWorkouts((prev) =>
+                                prev.map((item) =>
+                                  item.id === w.id
+                                    ? {
+                                        ...item,
+                                        likedByMe: !item.likedByMe,
+                                        likes: item.likedByMe
+                                          ? item.likes - 1
+                                          : item.likes + 1,
+                                      }
+                                    : item
+                                )
+                              );
+                            }}
+                            style={{
+                              background: 'none',
+                              border: 'none',
+                              color: w.likedByMe
+                                ? 'var(--hevy-red)'
+                                : 'var(--hevy-text-secondary)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 5,
+                              fontSize: 13,
+                              fontWeight: 600,
+                            }}
+                          >
+                            <Heart
+                              size={17}
+                              fill={w.likedByMe ? 'var(--hevy-red)' : 'none'}
+                            />
+                            {w.likes}
+                          </button>
+                          <span
+                            style={{
+                              color: 'var(--hevy-text-secondary)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 5,
+                              fontSize: 13,
+                              fontWeight: 600,
+                            }}
+                          >
+                            <MessageCircle size={17} />
+                            {w.comments.length}
+                          </span>
+                        </div>
 
-                    {/* Social Actions (Like, Comment, Share) */}
-                    <div
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        paddingTop: 8,
-                        borderTop: '1px solid var(--hevy-border)',
-                      }}
-                    >
-                      <div style={{ display: 'flex', gap: 14 }}>
                         <button
                           type="button"
+                          onClick={() => setCompletedSummary(w)}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            color: 'var(--hevy-blue)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 5,
+                            fontSize: 12,
+                            fontWeight: 700,
+                          }}
+                        >
+                          <Share2 size={15} /> Card de Resumo
+                        </button>
+                      </div>
+
+                      {/* Comments List & Quick Input */}
+                      {w.comments.length > 0 && (
+                        <div
+                          style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 4,
+                            backgroundColor: 'var(--hevy-elevated)',
+                            padding: '8px 10px',
+                            borderRadius: 8,
+                          }}
+                        >
+                          {w.comments.map((c) => (
+                            <div key={c.id} style={{ fontSize: 12 }}>
+                              <strong>@{c.username}: </strong>
+                              <span
+                                style={{ color: 'var(--hevy-text-secondary)' }}
+                              >
+                                {c.text}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <input
+                          type="text"
+                          placeholder="Adicionar anotação a este post de treino..."
+                          value={commentInputs[w.id] || ''}
+                          onChange={(e) =>
+                            setCommentInputs({
+                              ...commentInputs,
+                              [w.id]: e.target.value,
+                            })
+                          }
+                          className="hevy-set-input"
+                          style={{
+                            textAlign: 'left',
+                            padding: '0 10px',
+                            fontSize: 13,
+                            height: 34,
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="hevy-btn-primary"
+                          style={{ padding: '0 12px', fontSize: 12 }}
                           onClick={() => {
+                            const txt = (commentInputs[w.id] || '').trim();
+                            if (!txt) return;
                             setWorkouts((prev) =>
                               prev.map((item) =>
                                 item.id === w.id
                                   ? {
                                       ...item,
-                                      likedByMe: !item.likedByMe,
-                                      likes: item.likedByMe
-                                        ? item.likes - 1
-                                        : item.likes + 1,
+                                      comments: [
+                                        ...item.comments,
+                                        {
+                                          id: `c-${Date.now()}`,
+                                          username: userProfile.username,
+                                          avatar: getUserInitials(
+                                            userProfile.displayName
+                                          ),
+                                          text: txt,
+                                          createdAt: 'Agora',
+                                        },
+                                      ],
                                     }
                                   : item
                               )
                             );
-                          }}
-                          style={{
-                            background: 'none',
-                            border: 'none',
-                            color: w.likedByMe
-                              ? 'var(--hevy-red)'
-                              : 'var(--hevy-text-secondary)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 5,
-                            fontSize: 13,
-                            fontWeight: 600,
+                            setCommentInputs({ ...commentInputs, [w.id]: '' });
                           }}
                         >
-                          <Heart
-                            size={17}
-                            fill={w.likedByMe ? 'var(--hevy-red)' : 'none'}
-                          />
-                          {w.likes}
+                          Salvar
                         </button>
-                        <span
-                          style={{
-                            color: 'var(--hevy-text-secondary)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 5,
-                            fontSize: 13,
-                            fontWeight: 600,
-                          }}
-                        >
-                          <MessageCircle size={17} />
-                          {w.comments.length}
-                        </span>
                       </div>
-
-                      <button
-                        type="button"
-                        onClick={() => setCompletedSummary(w)}
-                        style={{
-                          background: 'none',
-                          border: 'none',
-                          color: 'var(--hevy-blue)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 5,
-                          fontSize: 12,
-                          fontWeight: 700,
-                        }}
-                      >
-                        <Share2 size={15} /> Card de Resumo
-                      </button>
-                    </div>
-
-                    {/* Comments List & Quick Input */}
-                    {w.comments.length > 0 && (
-                      <div
-                        style={{
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: 4,
-                          backgroundColor: 'var(--hevy-elevated)',
-                          padding: '8px 10px',
-                          borderRadius: 8,
-                        }}
-                      >
-                        {w.comments.map((c) => (
-                          <div key={c.id} style={{ fontSize: 12 }}>
-                            <strong>@{c.username}: </strong>
-                            <span style={{ color: 'var(--hevy-text-secondary)' }}>
-                              {c.text}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    <div style={{ display: 'flex', gap: 6 }}>
-                      <input
-                        type="text"
-                        placeholder="Adicionar comentário de incentivo..."
-                        value={commentInputs[w.id] || ''}
-                        onChange={(e) =>
-                          setCommentInputs({
-                            ...commentInputs,
-                            [w.id]: e.target.value,
-                          })
-                        }
-                        className="hevy-set-input"
-                        style={{
-                          textAlign: 'left',
-                          padding: '0 10px',
-                          fontSize: 13,
-                          height: 34,
-                        }}
-                      />
-                      <button
-                        type="button"
-                        className="hevy-btn-primary"
-                        style={{ padding: '0 12px', fontSize: 12 }}
-                        onClick={() => {
-                          const txt = (commentInputs[w.id] || '').trim();
-                          if (!txt) return;
-                          setWorkouts((prev) =>
-                            prev.map((item) =>
-                              item.id === w.id
-                                ? {
-                                    ...item,
-                                    comments: [
-                                      ...item.comments,
-                                      {
-                                        id: `c-${Date.now()}`,
-                                        username: 'iesus_candido',
-                                        avatar: 'IC',
-                                        text: txt,
-                                        createdAt: 'Agora',
-                                      },
-                                    ],
-                                  }
-                                : item
-                            )
-                          );
-                          setCommentInputs({ ...commentInputs, [w.id]: '' });
-                        }}
-                      >
-                        Enviar
-                      </button>
-                    </div>
-                  </article>
-                );
-              })}
+                    </article>
+                  );
+                })
+              )}
             </div>
           )}
 
-          {/* ==================== TAB 2: WORKOUT & ROUTINES ==================== */}
+          {/* ==================== TAB 2: WORKOUT & ROUTINES (+ CSV TEMPLATE & IMPORT) ==================== */}
           {activeTab === 'workout' && (
             <div
               style={{
@@ -1251,6 +1719,74 @@ export const App: React.FC = () => {
                 >
                   <Plus size={18} /> Iniciar Treino Vazio
                 </button>
+              </div>
+
+              {/* CSV Routine Import & Template Card (Buttons A and B) */}
+              <div
+                className="hevy-card"
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10,
+                  background:
+                    'linear-gradient(135deg, rgba(0,140,255,0.12) 0%, rgba(28,28,30,0.95) 100%)',
+                  borderColor: 'rgba(0,140,255,0.28)',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <FileSpreadsheet size={18} color="var(--hevy-blue)" />
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700 }}>
+                      Nova Rotina via Planilha CSV
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 11,
+                        color: 'var(--hevy-text-secondary)',
+                      }}
+                    >
+                      Baixe o modelo (A), preencha seus exercícios e importe (B)
+                    </div>
+                  </div>
+                </div>
+
+                <input
+                  ref={csvInputRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  onChange={handleImportCsvFile}
+                  style={{ display: 'none' }}
+                />
+
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 1fr',
+                    gap: 8,
+                  }}
+                >
+                  {/* Botão (A): Baixar Planilha Modelo */}
+                  <button
+                    type="button"
+                    className="hevy-btn-secondary"
+                    style={{ fontSize: 12, padding: '10px 8px' }}
+                    onClick={handleDownloadCsvTemplate}
+                  >
+                    <Download size={15} color="var(--hevy-blue)" />
+                    <span>(A) Baixar Modelo</span>
+                  </button>
+
+                  {/* Botão (B): Importar Planilha Preenchida */}
+                  <button
+                    type="button"
+                    className="hevy-btn-primary"
+                    style={{ fontSize: 12, padding: '10px 8px' }}
+                    onClick={() => csvInputRef.current?.click()}
+                  >
+                    <Upload size={15} />
+                    <span>(B) Importar CSV</span>
+                  </button>
+                </div>
               </div>
 
               <div
@@ -1283,7 +1819,7 @@ export const App: React.FC = () => {
                     })
                   }
                 >
-                  <FolderPlus size={14} /> Nova Rotina
+                  <FolderPlus size={14} /> Nova Manual
                 </button>
               </div>
 
@@ -1316,7 +1852,7 @@ export const App: React.FC = () => {
                               textTransform: 'uppercase',
                             }}
                           >
-                            📁 {routine.lastPerformed || 'Rotina Oficial'}
+                            📁 {routine.lastPerformed || 'Rotina Tatagan.sh'}
                           </span>
                           <h3
                             style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }}
@@ -1393,8 +1929,8 @@ export const App: React.FC = () => {
             </div>
           )}
 
-          {/* ==================== TAB 3: HEVY COACH ==================== */}
-          {activeTab === 'coach' && (
+          {/* ==================== TAB 3: WEEK (RELATÓRIO SEMANAL & IMPACTO NO FÍSICO) ==================== */}
+          {activeTab === 'week' && (
             <div
               style={{
                 padding: 14,
@@ -1403,6 +1939,7 @@ export const App: React.FC = () => {
                 gap: 14,
               }}
             >
+              {/* Week Header & Start Day Selector */}
               <div
                 className="hevy-card"
                 style={{
@@ -1410,216 +1947,437 @@ export const App: React.FC = () => {
                     'linear-gradient(135deg, rgba(0,140,255,0.22) 0%, rgba(18,18,20,0.98) 100%)',
                   display: 'flex',
                   flexDirection: 'column',
-                  gap: 10,
+                  gap: 12,
                 }}
               >
-                <img
-                  src="/assets/brand/hevy_coach_logo_white.png"
-                  alt="Hevy Coach"
-                  style={{
-                    height: 26,
-                    objectFit: 'contain',
-                    alignSelf: 'flex-start',
-                  }}
-                />
-                <p
-                  style={{
-                    fontSize: 13,
-                    color: 'var(--hevy-text-secondary)',
-                    lineHeight: 1.45,
-                  }}
-                >
-                  Acompanhamento de performance e periodização integrado ao Hevy Coach.
-                </p>
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(3, 1fr)',
-                    gap: 8,
-                    marginTop: 4,
-                  }}
-                >
-                  <div
-                    style={{
-                      backgroundColor: 'rgba(0,0,0,0.35)',
-                      padding: 10,
-                      borderRadius: 10,
-                      textAlign: 'center',
-                    }}
-                  >
-                    <div
-                      style={{ fontSize: 10, color: 'var(--hevy-text-muted)' }}
-                    >
-                      ADESÃO MESOCICLO
-                    </div>
-                    <div
-                      style={{
-                        fontSize: 16,
-                        fontWeight: 700,
-                        color: 'var(--hevy-green)',
-                      }}
-                    >
-                      94%
-                    </div>
-                  </div>
-                  <div
-                    style={{
-                      backgroundColor: 'rgba(0,0,0,0.35)',
-                      padding: 10,
-                      borderRadius: 10,
-                      textAlign: 'center',
-                    }}
-                  >
-                    <div
-                      style={{ fontSize: 10, color: 'var(--hevy-text-muted)' }}
-                    >
-                      SEMANA ATUAL
-                    </div>
-                    <div
-                      style={{
-                        fontSize: 16,
-                        fontWeight: 700,
-                        color: 'var(--hevy-blue)',
-                      }}
-                    >
-                      Bloco 4 / 6
-                    </div>
-                  </div>
-                  <div
-                    style={{
-                      backgroundColor: 'rgba(0,0,0,0.35)',
-                      padding: 10,
-                      borderRadius: 10,
-                      textAlign: 'center',
-                    }}
-                  >
-                    <div
-                      style={{ fontSize: 10, color: 'var(--hevy-text-muted)' }}
-                    >
-                      RPE ALVO
-                    </div>
-                    <div
-                      style={{
-                        fontSize: 16,
-                        fontWeight: 700,
-                        color: 'var(--hevy-gold)',
-                      }}
-                    >
-                      8.0 - 9.0
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Coach Interactive Chat */}
-              <div
-                className="hevy-card"
-                style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <Sparkles size={18} color="var(--hevy-blue)" />
-                  <h3 style={{ fontSize: 15, fontWeight: 700 }}>
-                    Chat Direto • Coach Marcos (Hevy Coach)
-                  </h3>
-                </div>
-
                 <div
                   style={{
                     display: 'flex',
-                    flexDirection: 'column',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
                     gap: 8,
-                    maxHeight: 230,
-                    overflowY: 'auto',
                   }}
                 >
-                  {coachMessages.map((msg: CoachMessage) => (
+                  <div>
                     <div
-                      key={msg.id}
                       style={{
-                        alignSelf:
-                          msg.sender === 'user' ? 'flex-end' : 'flex-start',
-                        maxWidth: '86%',
-                        backgroundColor:
-                          msg.sender === 'user'
-                            ? 'var(--hevy-blue)'
-                            : 'var(--hevy-elevated)',
-                        color: '#FFF',
-                        padding: '9px 12px',
-                        borderRadius: 12,
-                        fontSize: 13,
-                        lineHeight: 1.4,
+                        fontSize: 11,
+                        fontWeight: 700,
+                        color: 'var(--hevy-blue)',
+                        textTransform: 'uppercase',
                       }}
                     >
-                      <div>{msg.text}</div>
-                      <div
-                        style={{
-                          fontSize: 10,
-                          opacity: 0.7,
-                          marginTop: 4,
-                          textAlign: 'right',
-                        }}
-                      >
-                        {msg.timestamp}
-                      </div>
+                      RELATÓRIO DA SEMANA • TATAGAN.SH
                     </div>
-                  ))}
-                </div>
+                    <h2 style={{ fontSize: 18, fontWeight: 700, marginTop: 2 }}>
+                      {weeklyReport.rangeLabel}
+                    </h2>
+                  </div>
 
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <input
-                    type="text"
-                    placeholder="Enviar feedback do treino ao Coach..."
-                    value={coachInput}
-                    onChange={(e) => setCoachInput(e.target.value)}
-                    className="hevy-set-input"
+                  {/* Toggle: Domingo vs Segunda-feira */}
+                  <div
                     style={{
-                      textAlign: 'left',
-                      padding: '0 12px',
-                      height: 38,
-                      fontSize: 13,
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="hevy-btn-primary"
-                    style={{ padding: '0 12px' }}
-                    onClick={() => {
-                      if (!coachInput.trim()) return;
-                      const userMsg: CoachMessage = {
-                        id: `cm-${Date.now()}`,
-                        sender: 'user',
-                        text: coachInput.trim(),
-                        timestamp: 'Agora',
-                      };
-                      const autoReply: CoachMessage = {
-                        id: `cm-reply-${Date.now()}`,
-                        sender: 'coach',
-                        text: 'Perfeito! Registrei no seu check-in semanal do Hevy Coach. Mantenha a progressão de carga!',
-                        timestamp: 'Agora',
-                      };
-                      setCoachMessages([...coachMessages, userMsg, autoReply]);
-                      setCoachInput('');
+                      display: 'inline-flex',
+                      backgroundColor: 'rgba(0,0,0,0.45)',
+                      borderRadius: 9,
+                      padding: 3,
+                      border: '1px solid var(--hevy-border)',
                     }}
                   >
-                    <Send size={15} />
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => setWeekStartsOn(0)}
+                      style={{
+                        border: 'none',
+                        padding: '5px 9px',
+                        borderRadius: 6,
+                        fontSize: 11,
+                        fontWeight: 700,
+                        backgroundColor:
+                          weekStartsOn === 0 ? 'var(--hevy-blue)' : 'transparent',
+                        color:
+                          weekStartsOn === 0
+                            ? '#FFF'
+                            : 'var(--hevy-text-secondary)',
+                      }}
+                    >
+                      Domingo
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setWeekStartsOn(1)}
+                      style={{
+                        border: 'none',
+                        padding: '5px 9px',
+                        borderRadius: 6,
+                        fontSize: 11,
+                        fontWeight: 700,
+                        backgroundColor:
+                          weekStartsOn === 1 ? 'var(--hevy-blue)' : 'transparent',
+                        color:
+                          weekStartsOn === 1
+                            ? '#FFF'
+                            : 'var(--hevy-text-secondary)',
+                      }}
+                    >
+                      Segunda
+                    </button>
+                  </div>
                 </div>
 
-                <button
-                  type="button"
-                  className="hevy-btn-primary"
-                  style={{ width: '100%', marginTop: 4 }}
-                  onClick={() => startWorkout(routines[0])}
+                {/* 7-Day Frequency & Volume Bar Strip */}
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(7, 1fr)',
+                    gap: 6,
+                    paddingTop: 4,
+                  }}
                 >
-                  <Play size={15} /> Iniciar Rotina Prescrita pelo Coach
-                </button>
+                  {weeklyReport.days.map((d, idx) => {
+                    const trained = d.workoutsCount > 0;
+                    return (
+                      <div
+                        key={idx}
+                        style={{
+                          backgroundColor: trained
+                            ? 'rgba(42, 204, 88, 0.16)'
+                            : 'rgba(255,255,255,0.04)',
+                          border: d.isToday
+                            ? '1.5px solid var(--hevy-blue)'
+                            : trained
+                            ? '1px solid rgba(42, 204, 88, 0.4)'
+                            : '1px solid var(--hevy-border)',
+                          borderRadius: 10,
+                          padding: '8px 4px',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          gap: 4,
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontSize: 10,
+                            fontWeight: 700,
+                            color: d.isToday
+                              ? 'var(--hevy-blue)'
+                              : 'var(--hevy-text-secondary)',
+                          }}
+                        >
+                          {d.label}
+                        </span>
+                        <span style={{ fontSize: 13, fontWeight: 700 }}>
+                          {d.dateNum}
+                        </span>
+                        <div
+                          style={{
+                            width: 18,
+                            height: 18,
+                            borderRadius: '50%',
+                            backgroundColor: trained
+                              ? 'var(--hevy-green)'
+                              : 'var(--hevy-elevated)',
+                            color: trained ? '#FFF' : 'var(--hevy-text-muted)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontSize: 10,
+                            fontWeight: 700,
+                          }}
+                        >
+                          {trained ? '✓' : '–'}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* 4 Key Weekly Metrics */}
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(4, 1fr)',
+                    gap: 6,
+                  }}
+                >
+                  <div
+                    style={{
+                      backgroundColor: 'rgba(0,0,0,0.35)',
+                      padding: '9px 6px',
+                      borderRadius: 10,
+                      textAlign: 'center',
+                    }}
+                  >
+                    <div
+                      style={{ fontSize: 9, color: 'var(--hevy-text-muted)', fontWeight: 700 }}
+                    >
+                      TREINOS
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 15,
+                        fontWeight: 700,
+                        color: 'var(--hevy-green)',
+                        marginTop: 2,
+                      }}
+                    >
+                      {weeklyReport.weekWorkouts.length}
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      backgroundColor: 'rgba(0,0,0,0.35)',
+                      padding: '9px 6px',
+                      borderRadius: 10,
+                      textAlign: 'center',
+                    }}
+                  >
+                    <div
+                      style={{ fontSize: 9, color: 'var(--hevy-text-muted)', fontWeight: 700 }}
+                    >
+                      VOLUME
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 15,
+                        fontWeight: 700,
+                        color: 'var(--hevy-blue)',
+                        marginTop: 2,
+                      }}
+                    >
+                      {weeklyReport.weekVolume.toLocaleString('pt-BR')}kg
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      backgroundColor: 'rgba(0,0,0,0.35)',
+                      padding: '9px 6px',
+                      borderRadius: 10,
+                      textAlign: 'center',
+                    }}
+                  >
+                    <div
+                      style={{ fontSize: 9, color: 'var(--hevy-text-muted)', fontWeight: 700 }}
+                    >
+                      SÉRIES
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 15,
+                        fontWeight: 700,
+                        color: 'var(--hevy-text)',
+                        marginTop: 2,
+                      }}
+                    >
+                      {weeklyReport.weekSets}
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      backgroundColor: 'rgba(0,0,0,0.35)',
+                      padding: '9px 6px',
+                      borderRadius: 10,
+                      textAlign: 'center',
+                    }}
+                  >
+                    <div
+                      style={{ fontSize: 9, color: 'var(--hevy-text-muted)', fontWeight: 700 }}
+                    >
+                      TEMPO
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 15,
+                        fontWeight: 700,
+                        color: 'var(--hevy-gold)',
+                        marginTop: 2,
+                      }}
+                    >
+                      {formatDuration(weeklyReport.weekDuration)}
+                    </div>
+                  </div>
+                </div>
               </div>
 
-              <div className="hevy-card">
+              {/* Anatomical Physique Impact Map for the Present Week */}
+              <div className="hevy-card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Flame size={18} color="var(--hevy-blue)" />
+                  <div>
+                    <h3 style={{ fontSize: 15, fontWeight: 700 }}>
+                      Impacto no Físico na Semana Atual
+                    </h3>
+                    <p style={{ fontSize: 11, color: 'var(--hevy-text-secondary)' }}>
+                      Músculos ativados pelos treinos acumulados desde{' '}
+                      {weekStartsOn === 0 ? 'domingo' : 'segunda-feira'}
+                    </p>
+                  </div>
+                </div>
+
                 <MuscleHeatmap
-                  muscleCounts={lifetimeStats.muscleCounts}
-                  compact
+                  muscleCounts={weeklyReport.weekMuscleCounts}
+                  showLegend={false}
                 />
+              </div>
+
+              {/* Detailed Muscle Hypertrophy Stimulus Breakdown */}
+              <div
+                className="hevy-card"
+                style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <TrendingUp size={18} color="var(--hevy-green)" />
+                  <div>
+                    <h3 style={{ fontSize: 15, fontWeight: 700 }}>
+                      Resultado Físico por Grupamento Muscular
+                    </h3>
+                    <p style={{ fontSize: 11, color: 'var(--hevy-text-secondary)' }}>
+                      Análise de volume semanal efetivo (meta de hipertrofia: 10 a 20 séries/semana)
+                    </p>
+                  </div>
+                </div>
+
+                {Object.keys(weeklyReport.weekMuscleCounts).length === 0 ? (
+                  <div
+                    style={{
+                      padding: '18px 12px',
+                      borderRadius: 10,
+                      backgroundColor: 'var(--hevy-elevated)',
+                      textAlign: 'center',
+                      fontSize: 13,
+                      color: 'var(--hevy-text-secondary)',
+                    }}
+                  >
+                    Nenhum estímulo muscular registrado nesta semana ainda. Finalize um treino para visualizar o relatório de impacto no físico!
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {Object.entries(weeklyReport.weekMuscleCounts)
+                      .sort((a, b) => b[1] - a[1])
+                      .map(([muscle, sets]) => {
+                        const mVol = weeklyReport.weekMuscleVolume[muscle] || 0;
+                        const pct = Math.min(100, Math.round((sets / 14) * 100));
+                        let statusLabel = 'Ativação / Manutenção';
+                        let statusColor = 'var(--hevy-orange)';
+                        if (sets >= 10) {
+                          statusLabel = 'Estímulo Forte de Hipertrofia';
+                          statusColor = 'var(--hevy-green)';
+                        } else if (sets >= 5) {
+                          statusLabel = 'Construção Muscular Moderada';
+                          statusColor = 'var(--hevy-blue)';
+                        }
+
+                        return (
+                          <div
+                            key={muscle}
+                            style={{
+                              backgroundColor: 'var(--hevy-elevated)',
+                              padding: '10px 12px',
+                              borderRadius: 10,
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: 6,
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                              }}
+                            >
+                              <span style={{ fontWeight: 700, fontSize: 14 }}>
+                                {MUSCLE_LABELS[muscle] || muscle}
+                              </span>
+                              <span
+                                style={{
+                                  fontSize: 12,
+                                  fontWeight: 700,
+                                  color: statusColor,
+                                }}
+                              >
+                                {sets} {sets === 1 ? 'série' : 'séries'} •{' '}
+                                {mVol.toLocaleString('pt-BR')} kg
+                              </span>
+                            </div>
+
+                            {/* Progress Bar */}
+                            <div
+                              style={{
+                                width: '100%',
+                                height: 6,
+                                backgroundColor: 'rgba(255,255,255,0.08)',
+                                borderRadius: 999,
+                                overflow: 'hidden',
+                              }}
+                            >
+                              <div
+                                style={{
+                                  width: `${pct}%`,
+                                  height: '100%',
+                                  backgroundColor: statusColor,
+                                  borderRadius: 999,
+                                }}
+                              />
+                            </div>
+
+                            <div
+                              style={{
+                                fontSize: 11,
+                                color: 'var(--hevy-text-secondary)',
+                              }}
+                            >
+                              Efeito fisiológico: <strong>{statusLabel}</strong>
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
+                )}
+
+                {/* Untrained Major Muscles Alert */}
+                {weeklyReport.untrainedMuscles.length > 0 && (
+                  <div
+                    style={{
+                      marginTop: 4,
+                      padding: 12,
+                      borderRadius: 10,
+                      backgroundColor: 'rgba(255,255,255,0.03)',
+                      border: '1px solid var(--hevy-border)',
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 700,
+                        color: 'var(--hevy-text-muted)',
+                        textTransform: 'uppercase',
+                        marginBottom: 6,
+                      }}
+                    >
+                      Músculos Ainda Não Estimulados Nesta Semana
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      {weeklyReport.untrainedMuscles.map((m) => (
+                        <span
+                          key={m}
+                          style={{
+                            fontSize: 11,
+                            fontWeight: 600,
+                            padding: '4px 9px',
+                            borderRadius: 999,
+                            backgroundColor: 'var(--hevy-elevated)',
+                            color: 'var(--hevy-text-secondary)',
+                          }}
+                        >
+                          {MUSCLE_LABELS[m] || m}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -1643,10 +2401,10 @@ export const App: React.FC = () => {
               >
                 <div>
                   <h2 style={{ fontSize: 18, fontWeight: 700 }}>
-                    Biblioteca Oficial ({allExercises.length} Exercícios)
+                    Biblioteca ({allExercises.length} Exercícios)
                   </h2>
                   <p style={{ fontSize: 12, color: 'var(--hevy-text-secondary)' }}>
-                    Extraídos do bundle Hermes com vídeos MP4 e instruções em Português
+                    Catálogo completo Tatagan.sh com vídeos MP4 e instruções
                   </p>
                 </div>
                 <button
@@ -1793,7 +2551,7 @@ export const App: React.FC = () => {
             </div>
           )}
 
-          {/* ==================== TAB 5: PROFILE & ANALYTICS ==================== */}
+          {/* ==================== TAB 5: PROFILE (EDITABLE USERNAME & FACTUAL VOLUME) ==================== */}
           {activeTab === 'profile' && (
             <div
               style={{
@@ -1803,47 +2561,167 @@ export const App: React.FC = () => {
                 gap: 14,
               }}
             >
+              {/* Editable Profile Card */}
               <div
                 className="hevy-card"
-                style={{ display: 'flex', alignItems: 'center', gap: 14 }}
+                style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
               >
-                <img
-                  src="/assets/brand/ic_launcher_round.png"
-                  alt="Avatar"
-                  style={{ width: 60, height: 60, borderRadius: '50%' }}
-                />
-                <div style={{ flex: 1 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <h2 style={{ fontSize: 18, fontWeight: 700 }}>
-                      Iesus Candido
-                    </h2>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div
+                      style={{
+                        width: 58,
+                        height: 58,
+                        borderRadius: '50%',
+                        background: 'linear-gradient(135deg, #008CFF, #0051A8)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: 20,
+                        fontWeight: 800,
+                        color: '#FFF',
+                        flexShrink: 0,
+                      }}
+                    >
+                      {getUserInitials(userProfile.displayName)}
+                    </div>
+                    <div>
+                      <h2 style={{ fontSize: 18, fontWeight: 700 }}>
+                        {userProfile.displayName}
+                      </h2>
+                      <div
+                        style={{
+                          fontSize: 13,
+                          color: 'var(--hevy-blue)',
+                          fontWeight: 600,
+                        }}
+                      >
+                        @{userProfile.username}
+                      </div>
+                      <div
+                        style={{
+                          display: 'flex',
+                          gap: 14,
+                          marginTop: 6,
+                          fontSize: 12,
+                          color: 'var(--hevy-text-secondary)',
+                        }}
+                      >
+                        <span>
+                          <strong>{workouts.length}</strong> Treinos
+                        </span>
+                        <span>
+                          <strong>{lifetimeStats.totalSets}</strong> Séries
+                        </span>
+                      </div>
+                    </div>
                   </div>
-                  <div
-                    style={{ fontSize: 12, color: 'var(--hevy-text-secondary)' }}
-                  >
-                    @iesus_candido • Atleta PRO
-                  </div>
-                  <div
-                    style={{
-                      display: 'flex',
-                      gap: 14,
-                      marginTop: 8,
-                      fontSize: 12,
+
+                  <button
+                    type="button"
+                    className="hevy-btn-secondary"
+                    style={{ padding: '7px 11px', fontSize: 12 }}
+                    onClick={() => {
+                      setDraftDisplayName(userProfile.displayName);
+                      setDraftUsername(userProfile.username);
+                      setEditingProfile((v) => !v);
                     }}
                   >
-                    <span>
-                      <strong>{workouts.length}</strong> Treinos
-                    </span>
-                    <span>
-                      <strong>248</strong> Seguidores
-                    </span>
-                    <span>
-                      <strong>182</strong> Seguindo
-                    </span>
-                  </div>
+                    <Edit3 size={14} /> Editar
+                  </button>
                 </div>
+
+                {editingProfile && (
+                  <div
+                    style={{
+                      paddingTop: 10,
+                      borderTop: '1px solid var(--hevy-border)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 8,
+                    }}
+                  >
+                    <div>
+                      <label
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 700,
+                          color: 'var(--hevy-text-secondary)',
+                        }}
+                      >
+                        NOME DE EXIBIÇÃO
+                      </label>
+                      <input
+                        type="text"
+                        value={draftDisplayName}
+                        onChange={(e) => setDraftDisplayName(e.target.value)}
+                        placeholder="Seu nome"
+                        className="hevy-set-input"
+                        style={{
+                          textAlign: 'left',
+                          padding: '0 12px',
+                          height: 38,
+                          marginTop: 4,
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <label
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 700,
+                          color: 'var(--hevy-text-secondary)',
+                        }}
+                      >
+                        NOME DE USUÁRIO (@HANDLE)
+                      </label>
+                      <input
+                        type="text"
+                        value={draftUsername}
+                        onChange={(e) =>
+                          setDraftUsername(
+                            e.target.value.replace(/^@/, '').replace(/\s+/g, '_')
+                          )
+                        }
+                        placeholder="seu_usuario"
+                        className="hevy-set-input"
+                        style={{
+                          textAlign: 'left',
+                          padding: '0 12px',
+                          height: 38,
+                          marginTop: 4,
+                        }}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      className="hevy-btn-primary"
+                      onClick={() => {
+                        const cleanName =
+                          draftDisplayName.trim() || 'Atleta Tatagan.sh';
+                        const cleanHandle =
+                          draftUsername.trim() || 'atleta_tatagan';
+                        setUserProfile({
+                          displayName: cleanName,
+                          username: cleanHandle,
+                        });
+                        setEditingProfile(false);
+                      }}
+                    >
+                      <Check size={15} /> Salvar Nome de Usuário
+                    </button>
+                  </div>
+                )}
               </div>
 
+              {/* Factual Lifetime Volume Card (Starts at 0 kg) */}
               <div
                 className="hevy-card"
                 style={{
@@ -1861,9 +2739,9 @@ export const App: React.FC = () => {
                       color: 'var(--hevy-blue)',
                     }}
                   >
-                    VOLUME TOTAL ACUMULADO
+                    VOLUME TOTAL ACUMULADO (FACTUAL)
                   </div>
-                  <div style={{ fontSize: 22, fontWeight: 700, marginTop: 2 }}>
+                  <div style={{ fontSize: 24, fontWeight: 800, marginTop: 2 }}>
                     {lifetimeStats.totalVolume.toLocaleString('pt-BR')} kg
                   </div>
                   <div
@@ -1873,22 +2751,32 @@ export const App: React.FC = () => {
                       marginTop: 2,
                     }}
                   >
-                    Equivalente a {lifetimeStats.equivalence.article}{' '}
-                    <strong>{lifetimeStats.equivalence.name}</strong> (
-                    {lifetimeStats.totalSets} séries)
+                    {lifetimeStats.equivalence ? (
+                      <>
+                        Equivalente a {lifetimeStats.equivalence.article}{' '}
+                        <strong>{lifetimeStats.equivalence.name}</strong> (
+                        {lifetimeStats.totalSets} séries concluídas)
+                      </>
+                    ) : (
+                      'Baseado nos seus treinos registrados (inicia em 0 kg)'
+                    )}
                   </div>
                 </div>
-                <img
-                  src={lifetimeStats.equivalence.asset}
-                  alt={lifetimeStats.equivalence.name}
-                  style={{ width: 84, height: 64, objectFit: 'contain' }}
-                />
+                {lifetimeStats.equivalence && (
+                  <img
+                    src={lifetimeStats.equivalence.asset}
+                    alt={lifetimeStats.equivalence.name}
+                    style={{ width: 84, height: 64, objectFit: 'contain' }}
+                  />
+                )}
               </div>
 
+              {/* Full Anatomical Heatmap */}
               <div className="hevy-card">
                 <MuscleHeatmap muscleCounts={lifetimeStats.muscleCounts} />
               </div>
 
+              {/* Body Measurements Tracker */}
               <div
                 className="hevy-card"
                 style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
@@ -1953,30 +2841,32 @@ export const App: React.FC = () => {
                   </button>
                 </div>
 
-                <div
-                  style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
-                >
-                  {measurements.slice(0, 5).map((m: BodyMeasurement) => (
-                    <div
-                      key={m.id}
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        padding: '8px 10px',
-                        borderRadius: 8,
-                        backgroundColor: 'var(--hevy-elevated)',
-                        fontSize: 13,
-                      }}
-                    >
-                      <span style={{ color: 'var(--hevy-text-secondary)' }}>
-                        {m.date}
-                      </span>
-                      <span style={{ fontWeight: 700 }}>
-                        {m.weightKg} kg • {m.bodyFatPct}% BF • Braço {m.armsCm} cm
-                      </span>
-                    </div>
-                  ))}
-                </div>
+                {measurements.length > 0 && (
+                  <div
+                    style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
+                  >
+                    {measurements.slice(0, 5).map((m: BodyMeasurement) => (
+                      <div
+                        key={m.id}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          padding: '8px 10px',
+                          borderRadius: 8,
+                          backgroundColor: 'var(--hevy-elevated)',
+                          fontSize: 13,
+                        }}
+                      >
+                        <span style={{ color: 'var(--hevy-text-secondary)' }}>
+                          {m.date}
+                        </span>
+                        <span style={{ fontWeight: 700 }}>
+                          {m.weightKg} kg • {m.bodyFatPct}% BF
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="hevy-card" style={{ display: 'flex', gap: 8 }}>
@@ -1988,7 +2878,7 @@ export const App: React.FC = () => {
                     const blob = new Blob(
                       [
                         JSON.stringify(
-                          { workouts, routines, measurements },
+                          { userProfile, workouts, routines, measurements },
                           null,
                           2
                         ),
@@ -1998,11 +2888,11 @@ export const App: React.FC = () => {
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a');
                     a.href = url;
-                    a.download = 'hevy-backup.json';
+                    a.download = 'tatagan-backup.json';
                     a.click();
                   }}
                 >
-                  <Download size={15} /> Exportar Dados (JSON)
+                  <Download size={15} /> Exportar Backup (JSON)
                 </button>
               </div>
             </div>
@@ -2761,11 +3651,11 @@ export const App: React.FC = () => {
           </button>
           <button
             type="button"
-            className={`hevy-nav-btn ${activeTab === 'coach' ? 'active' : ''}`}
-            onClick={() => setActiveTab('coach')}
+            className={`hevy-nav-btn ${activeTab === 'week' ? 'active' : ''}`}
+            onClick={() => setActiveTab('week')}
           >
-            <Award size={20} />
-            <span>Coach</span>
+            <Calendar size={20} />
+            <span>Week</span>
           </button>
           <button
             type="button"

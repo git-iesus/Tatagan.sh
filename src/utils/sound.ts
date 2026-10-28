@@ -14,7 +14,7 @@ export const TIMER_SOUND_OPTIONS: { id: HevySoundName; label: string }[] = [
   { id: 'boxing_bell', label: 'Gongo de Boxe' },
   { id: 'ting_ting', label: 'Ting Ting' },
   { id: 'futuristic', label: 'Futurista' },
-  { id: 'original', label: 'Clássico Hevy' },
+  { id: 'original', label: 'Clássico Tatagan.sh' },
   { id: 'alarm', label: 'Alarme Forte' },
 ];
 

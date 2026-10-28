@@ -37,10 +37,10 @@ export const WorkoutSummaryModal: React.FC<WorkoutSummaryModalProps> = ({
   }, []);
 
   const handleShare = async () => {
-    const shareText = `Treino concluído no Hevy! 💪\n📌 ${workout.title}\n⏱️ Duração: ${formatDuration(workout.durationSeconds)}\n🏋️ Volume Total: ${totalVolume.toLocaleString('pt-BR')} kg (equivalente a ${equivalence.article} ${equivalence.name}!)\n🏆 Recordes Pessoais: ${workout.prCount}`;
+    const shareText = `Treino concluído no Tatagan.sh! 💪\n📌 ${workout.title}\n⏱️ Duração: ${formatDuration(workout.durationSeconds)}\n🏋️ Volume Total: ${totalVolume.toLocaleString('pt-BR')} kg (equivalente a ${equivalence.article} ${equivalence.name}!)\n🏆 Recordes Pessoais: ${workout.prCount}`;
     if (navigator.share) {
       try {
-        await navigator.share({ title: `Hevy - ${workout.title}`, text: shareText });
+        await navigator.share({ title: `Tatagan.sh - ${workout.title}`, text: shareText });
         return;
       } catch {
         // Fallback to clipboard
@@ -80,7 +80,7 @@ export const WorkoutSummaryModal: React.FC<WorkoutSummaryModalProps> = ({
           </div>
           <h2 style={{ fontSize: 22, fontWeight: 700 }}>{workout.title}</h2>
           <p style={{ fontSize: 13, color: 'var(--hevy-text-secondary)', marginTop: 2 }}>
-            Parabéns! Esse foi o seu treino de hoje no Hevy.
+            Parabéns! Esse foi o seu treino de hoje no Tatagan.sh.
           </p>
         </div>
 
@@ -171,7 +171,7 @@ export const WorkoutSummaryModal: React.FC<WorkoutSummaryModalProps> = ({
                 textTransform: 'uppercase',
               }}
             >
-              Comparação Oficial Hevy
+              Comparação de Volume Tatagan.sh
             </div>
             <div style={{ fontSize: 16, fontWeight: 700, marginTop: 4 }}>
               Você levantou {equivalence.article} {equivalence.name}!
