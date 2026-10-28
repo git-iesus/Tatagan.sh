@@ -33,6 +33,7 @@ import {
   Cloud,
   LogOut,
   RotateCcw,
+  GripVertical,
 } from 'lucide-react';
 import exercisesRaw from './data/exercises.json';
 import {
@@ -67,14 +68,8 @@ import {
   HevySoundName,
   TIMER_SOUND_OPTIONS,
 } from './utils/sound';
-import {
-  AuthSession,
-  CloudUserPayload,
-  deriveUserCredentials,
-  fetchCloudRecord,
-  pushCloudRecord,
-  mergeUserPayloads,
-} from './utils/cloudSync';
+import { useDragReorder, moveItem } from './hooks/useDragReorder';
+import { useSupabaseSync } from './hooks/useSupabaseSync';
 import { TataganLogo } from './components/TataganLogo';
 import { MuscleHeatmap } from './components/MuscleHeatmap';
 import { PlateCalculatorModal } from './components/PlateCalculatorModal';
@@ -173,17 +168,7 @@ export const App: React.FC = () => {
     return saved === '0' ? 0 : 1;
   });
 
-  // Cloud Authentication Session State
-  const [authSession, setAuthSession] = useState<AuthSession | null>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.authSession);
-    return saved ? JSON.parse(saved) : null;
-  });
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [syncStatus, setSyncStatus] = useState<
-    'idle' | 'syncing' | 'synced' | 'error'
-  >('idle');
-  const isApplyingRemoteRef = useRef(false);
-  const lastAppliedTimestampRef = useRef<number>(0);
 
   // User Profile State
   const [userProfile, setUserProfile] = useState<UserProfile>(() => {
@@ -247,6 +232,34 @@ export const App: React.FC = () => {
   const [buildingRoutine, setBuildingRoutine] = useState<Routine | null>(null);
   const [isEditingExistingRoutine, setIsEditingExistingRoutine] =
     useState<boolean>(false);
+
+  // Routine Drag & Drop Reordering Hook (Pointer-based, mobile touch + desktop mouse)
+  const routineScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const routineExerciseIds = useMemo(
+    () => buildingRoutine?.exercises.map((e) => e.id) || [],
+    [buildingRoutine?.exercises]
+  );
+  const handleMoveRoutineExercise = useCallback(
+    (fromIndex: number, toIndex: number) => {
+      setBuildingRoutine((prev) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          exercises: moveItem(prev.exercises, fromIndex, toIndex),
+        };
+      });
+    },
+    []
+  );
+  const {
+    draggingId: routineDraggingId,
+    registerItem: registerRoutineItem,
+    getHandleProps: getRoutineHandleProps,
+  } = useDragReorder(
+    routineExerciseIds,
+    handleMoveRoutineExercise,
+    routineScrollContainerRef
+  );
 
   // CSV File Input Ref
   const csvInputRef = useRef<HTMLInputElement | null>(null);
@@ -319,17 +332,6 @@ export const App: React.FC = () => {
   }, [measurements]);
 
   useEffect(() => {
-    if (authSession) {
-      localStorage.setItem(
-        STORAGE_KEYS.authSession,
-        JSON.stringify(authSession)
-      );
-    } else {
-      localStorage.removeItem(STORAGE_KEYS.authSession);
-    }
-  }, [authSession]);
-
-  useEffect(() => {
     if (activeWorkout) {
       localStorage.setItem(
         STORAGE_KEYS.activeWorkout,
@@ -340,237 +342,65 @@ export const App: React.FC = () => {
     }
   }, [activeWorkout]);
 
-  // ==================== CLOUD SYNC ENGINE (DESKTOP <-> MOBILE) ====================
-  const getCurrentLocalPayload = useCallback((): CloudUserPayload => {
-    return {
+  // ==================== SUPABASE REALTIME CLOUD SYNC ====================
+  const {
+    configured: isCloudConfigured,
+    user: authUser,
+    status: syncStatus,
+    lastSyncedAt,
+    signIn: handleSupabaseLogin,
+    signUp: handleSupabaseRegister,
+    signOut: handleSupabaseLogout,
+    requestPasswordReset: handleSupabaseResetPassword,
+    syncNow: handleForceSync,
+  } = useSupabaseSync({
+    state: {
       routines,
       workouts,
-      measurements,
       customExercises,
-      userProfile,
-      weekStartsOn,
-      timerSound,
-      defaultRestSeconds: DEFAULT_REST_SECONDS,
-    };
-  }, [
-    routines,
-    workouts,
-    measurements,
-    customExercises,
-    userProfile,
-    weekStartsOn,
-    timerSound,
-  ]);
-
-  const applyCloudPayloadToState = useCallback((payload: CloudUserPayload) => {
-    isApplyingRemoteRef.current = true;
-    setRoutines(payload.routines || INITIAL_ROUTINES);
-    setWorkouts(payload.workouts || []);
-    setMeasurements(payload.measurements || []);
-    setCustomExercises(payload.customExercises || []);
-    if (payload.userProfile) {
-      setUserProfile(payload.userProfile);
-    }
-    if (payload.weekStartsOn === 0 || payload.weekStartsOn === 1) {
-      setWeekStartsOn(payload.weekStartsOn);
-    }
-    if (payload.timerSound) {
-      setTimerSound(payload.timerSound);
-    }
-    setTimeout(() => {
-      isApplyingRemoteRef.current = false;
-    }, 300);
-  }, []);
-
-  // Push local changes automatically when logged in
-  useEffect(() => {
-    if (!authSession || isApplyingRemoteRef.current) return;
-
-    const timer = window.setTimeout(async () => {
-      setSyncStatus('syncing');
-      try {
-        const updatedAt = await pushCloudRecord(
-          authSession,
-          getCurrentLocalPayload()
-        );
-        lastAppliedTimestampRef.current = updatedAt;
-        setAuthSession((prev) =>
-          prev ? { ...prev, lastSyncedAt: updatedAt } : null
-        );
-        setSyncStatus('synced');
-      } catch {
-        setSyncStatus('error');
+      measurements,
+      settings: {
+        userProfile,
+        weekStartsOn,
+        timerSound,
+        theme,
+      },
+    },
+    seedState: {
+      routines: INITIAL_ROUTINES,
+      workouts: INITIAL_WORKOUT_HISTORY,
+      customExercises: [],
+      measurements: INITIAL_MEASUREMENTS,
+      settings: {
+        userProfile: INITIAL_USER_PROFILE,
+        weekStartsOn: 1,
+        timerSound: 'boxing_bell',
+        theme: 'dark',
+      },
+    },
+    applyRemoteState: useCallback((next) => {
+      setRoutines(next.routines);
+      setWorkouts(next.workouts);
+      setCustomExercises(next.customExercises);
+      setMeasurements(next.measurements);
+      if (next.settings) {
+        if (next.settings.userProfile) setUserProfile(next.settings.userProfile);
+        if (next.settings.weekStartsOn !== undefined)
+          setWeekStartsOn(next.settings.weekStartsOn);
+        if (next.settings.timerSound) setTimerSound(next.settings.timerSound);
+        if (next.settings.theme) setTheme(next.settings.theme);
       }
-    }, 600);
-
-    return () => clearTimeout(timer);
-  }, [
-    routines,
-    workouts,
-    measurements,
-    customExercises,
-    userProfile,
-    weekStartsOn,
-    timerSound,
-    authSession,
-    getCurrentLocalPayload,
-  ]);
-
-  // Pull remote changes on window focus / visibilitychange / interval
-  const pullFromCloud = useCallback(async () => {
-    if (!authSession) return;
-    setSyncStatus('syncing');
-    try {
-      const remoteRecord = await fetchCloudRecord(
-        authSession.topic,
-        authSession.userId
-      );
-      if (
-        remoteRecord &&
-        remoteRecord.payload &&
-        remoteRecord.updatedAt > lastAppliedTimestampRef.current
-      ) {
-        lastAppliedTimestampRef.current = remoteRecord.updatedAt;
-        applyCloudPayloadToState(remoteRecord.payload);
-        setAuthSession((prev) =>
-          prev ? { ...prev, lastSyncedAt: remoteRecord.updatedAt } : null
-        );
-      }
-      setSyncStatus('synced');
-    } catch {
-      setSyncStatus('error');
-    }
-  }, [authSession, applyCloudPayloadToState]);
-
-  useEffect(() => {
-    if (!authSession) return;
-    pullFromCloud();
-
-    const handleVisibility = () => {
-      if (document.visibilityState === 'visible') {
-        pullFromCloud();
-      }
-    };
-    window.addEventListener('focus', pullFromCloud);
-    document.addEventListener('visibilitychange', handleVisibility);
-    const interval = window.setInterval(pullFromCloud, 18000);
-
-    return () => {
-      window.removeEventListener('focus', pullFromCloud);
-      document.removeEventListener('visibilitychange', handleVisibility);
-      clearInterval(interval);
-    };
-  }, [authSession, pullFromCloud]);
-
-  // Login Handler (with Automatic Local Data Migration)
-  const handleLogin = async (
-    email: string,
-    password: string
-  ): Promise<{ ok: boolean; error?: string }> => {
-    setSyncStatus('syncing');
-    const { userId, cleanEmail, topic, passwordHash } =
-      await deriveUserCredentials(email, password);
-
-    const existingRecord = await fetchCloudRecord(topic, userId);
-
-    if (!existingRecord) {
-      setSyncStatus('idle');
-      return {
-        ok: false,
-        error:
-          'Conta não encontrada para este e-mail. Use a aba "Cadastro" para criar sua conta.',
-      };
-    }
-
-    if (existingRecord.passwordHash !== passwordHash) {
-      setSyncStatus('error');
-      return {
-        ok: false,
-        error: 'Senha incorreta para este e-mail.',
-      };
-    }
-
-    // Merge local pre-login data with remote cloud account data so no history or routine is lost
-    const localPayload = getCurrentLocalPayload();
-    const mergedPayload = existingRecord.payload
-      ? mergeUserPayloads(localPayload, existingRecord.payload)
-      : localPayload;
-
-    applyCloudPayloadToState(mergedPayload);
-
-    const newSession: AuthSession = {
-      userId,
-      email: cleanEmail,
-      passwordHash,
-      topic,
-      lastSyncedAt: Date.now(),
-    };
-    const updatedAt = await pushCloudRecord(newSession, mergedPayload);
-    lastAppliedTimestampRef.current = updatedAt;
-    setAuthSession({ ...newSession, lastSyncedAt: updatedAt });
-    setSyncStatus('synced');
-    return { ok: true };
-  };
-
-  // Register Handler (with Automatic Local Data Migration)
-  const handleRegister = async (
-    email: string,
-    password: string,
-    displayName: string
-  ): Promise<{ ok: boolean; error?: string }> => {
-    setSyncStatus('syncing');
-    const { userId, cleanEmail, topic, passwordHash } =
-      await deriveUserCredentials(email, password);
-
-    const existingRecord = await fetchCloudRecord(topic, userId);
-    if (existingRecord && existingRecord.passwordHash !== passwordHash) {
-      setSyncStatus('error');
-      return {
-        ok: false,
-        error:
-          'Este e-mail já está cadastrado. Use a aba "Login" com a senha correta.',
-      };
-    }
-
-    const handleFromEmail = cleanEmail
-      .split('@')[0]
-      .replace(/[^a-z0-9_]/gi, '_');
-    const newProfile: UserProfile = {
-      displayName: displayName.trim(),
-      username: handleFromEmail || 'atleta_tatagan',
-    };
-
-    const localPayload: CloudUserPayload = {
-      ...getCurrentLocalPayload(),
-      userProfile: newProfile,
-    };
-
-    const finalPayload = existingRecord?.payload
-      ? mergeUserPayloads(localPayload, existingRecord.payload)
-      : localPayload;
-
-    finalPayload.userProfile = newProfile;
-    applyCloudPayloadToState(finalPayload);
-
-    const newSession: AuthSession = {
-      userId,
-      email: cleanEmail,
-      passwordHash,
-      topic,
-      lastSyncedAt: Date.now(),
-    };
-
-    const updatedAt = await pushCloudRecord(newSession, finalPayload);
-    lastAppliedTimestampRef.current = updatedAt;
-    setAuthSession({ ...newSession, lastSyncedAt: updatedAt });
-    setSyncStatus('synced');
-    return { ok: true };
-  };
-
-  const handleLogout = () => {
-    setAuthSession(null);
-    setSyncStatus('idle');
-  };
+    }, []),
+    resetLocalData: useCallback(() => {
+      setRoutines(INITIAL_ROUTINES);
+      setWorkouts(INITIAL_WORKOUT_HISTORY);
+      setCustomExercises([]);
+      setMeasurements(INITIAL_MEASUREMENTS);
+      setUserProfile(INITIAL_USER_PROFILE);
+      setWeekStartsOn(1);
+      setTimerSound('boxing_bell');
+    }, []),
+  });
 
   // Live Workout Elapsed Timer
   useEffect(() => {
@@ -2963,10 +2793,10 @@ export const App: React.FC = () => {
               <div
                 className="hevy-card"
                 style={{
-                  background: authSession
+                  background: authUser
                     ? 'linear-gradient(135deg, rgba(42,204,88,0.14) 0%, rgba(28,28,30,0.96) 100%)'
                     : 'linear-gradient(135deg, rgba(0,140,255,0.16) 0%, rgba(28,28,30,0.96) 100%)',
-                  borderColor: authSession
+                  borderColor: authUser
                     ? 'rgba(42,204,88,0.35)'
                     : 'rgba(0,140,255,0.35)',
                   display: 'flex',
@@ -2980,14 +2810,14 @@ export const App: React.FC = () => {
                     style={{
                       fontSize: 11,
                       fontWeight: 700,
-                      color: authSession
+                      color: authUser
                         ? 'var(--hevy-green)'
                         : 'var(--hevy-blue)',
                       textTransform: 'uppercase',
                     }}
                   >
-                    {authSession
-                      ? 'SINCRONIZAÇÃO EM NUVEM ATIVA'
+                    {authUser
+                      ? 'SINCRONIZAÇÃO EM NUVEM (SUPABASE) ATIVA'
                       : 'SINCRONIZAÇÃO MOBILE / DESKTOP'}
                   </div>
                   <div
@@ -3000,8 +2830,8 @@ export const App: React.FC = () => {
                       textOverflow: 'ellipsis',
                     }}
                   >
-                    {authSession
-                      ? authSession.email
+                    {authUser
+                      ? authUser.email
                       : 'Acesse no celular e no computador'}
                   </div>
                   <div
@@ -3011,8 +2841,8 @@ export const App: React.FC = () => {
                       marginTop: 2,
                     }}
                   >
-                    {authSession
-                      ? `Rotinas e histórico vinculados ao ID ${authSession.userId.slice(
+                    {authUser
+                      ? `Rotinas e histórico vinculados ao ID ${authUser.id.slice(
                           0,
                           10
                         )}...`
@@ -3020,7 +2850,7 @@ export const App: React.FC = () => {
                   </div>
                 </div>
 
-                {authSession ? (
+                {authUser ? (
                   <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                     <button
                       type="button"
@@ -3038,7 +2868,7 @@ export const App: React.FC = () => {
                         fontSize: 12,
                         color: 'var(--hevy-red)',
                       }}
-                      onClick={handleLogout}
+                      onClick={handleSupabaseLogout}
                       title="Sair da conta (Logout)"
                     >
                       <LogOut size={15} />
@@ -4126,8 +3956,9 @@ export const App: React.FC = () => {
                 />
               </div>
 
-              {/* Editable Exercises List inside Routine */}
+              {/* Editable Exercises List inside Routine with Drag & Drop */}
               <div
+                ref={routineScrollContainerRef}
                 style={{
                   flex: 1,
                   overflowY: 'auto',
@@ -4137,23 +3968,55 @@ export const App: React.FC = () => {
                   paddingRight: 2,
                 }}
               >
+                {buildingRoutine.exercises.length > 1 && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      padding: '4px 8px',
+                      borderRadius: 8,
+                      backgroundColor: 'rgba(0, 114, 245, 0.08)',
+                      color: 'var(--hevy-blue)',
+                      fontSize: 11,
+                      fontWeight: 600,
+                    }}
+                  >
+                    <GripVertical size={14} />
+                    <span>Segure e arraste pelo ícone ⠿ para reorganizar os exercícios</span>
+                  </div>
+                )}
+
                 {buildingRoutine.exercises.map(
                   (re: WorkoutExercise, exIdx: number) => {
                     const meta = exerciseMap[re.exerciseId];
                     const currentRest =
                       re.restTimerSeconds || DEFAULT_REST_SECONDS;
+                    const isDragging = routineDraggingId === re.id;
 
                     return (
                       <div
                         key={re.id}
+                        ref={registerRoutineItem(re.id)}
                         className="hevy-card"
                         style={{
                           display: 'flex',
                           flexDirection: 'column',
                           gap: 8,
+                          position: 'relative',
+                          transition:
+                            'transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease, border-color 0.15s ease',
+                          opacity: isDragging ? 0.6 : 1,
+                          transform: isDragging ? 'scale(1.02)' : 'none',
+                          boxShadow: isDragging
+                            ? '0 10px 25px rgba(0, 114, 245, 0.3)'
+                            : undefined,
+                          borderColor: isDragging
+                            ? 'var(--hevy-blue)'
+                            : undefined,
                         }}
                       >
-                        {/* Exercise Title + Rest Timer Selector + Remove Exercise Button */}
+                        {/* Exercise Title + Drag Handle + Rest Timer Selector + Remove Exercise Button */}
                         <div
                           style={{
                             display: 'flex',
@@ -4162,29 +4025,66 @@ export const App: React.FC = () => {
                             gap: 8,
                           }}
                         >
-                          <div style={{ minWidth: 0 }}>
-                            <div
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 6,
+                              minWidth: 0,
+                              flex: 1,
+                            }}
+                          >
+                            {/* Drag Reorder Handle */}
+                            <button
+                              type="button"
+                              {...getRoutineHandleProps(re.id)}
+                              title="Segure e arraste para reordenar"
+                              aria-label="Reordenar exercício"
                               style={{
-                                fontWeight: 700,
-                                fontSize: 14,
-                                color: 'var(--hevy-blue)',
-                                whiteSpace: 'nowrap',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
+                                background: 'none',
+                                border: 'none',
+                                padding: '6px 4px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                color: isDragging
+                                  ? 'var(--hevy-blue)'
+                                  : 'var(--hevy-text-muted)',
+                                cursor: isDragging ? 'grabbing' : 'grab',
+                                touchAction: 'none',
+                                userSelect: 'none',
+                                WebkitUserSelect: 'none',
+                                borderRadius: 4,
+                                flexShrink: 0,
                               }}
                             >
-                              {exIdx + 1}. {meta?.title || re.exerciseId}
-                            </div>
-                            <div
-                              style={{
-                                fontSize: 11,
-                                color: 'var(--hevy-text-muted)',
-                              }}
-                            >
-                              {meta
-                                ? MUSCLE_LABELS[meta.muscle_group] ||
-                                  meta.muscle_group
-                                : 'Exercício'}
+                              <GripVertical size={18} />
+                            </button>
+
+                            <div style={{ minWidth: 0 }}>
+                              <div
+                                style={{
+                                  fontWeight: 700,
+                                  fontSize: 14,
+                                  color: 'var(--hevy-blue)',
+                                  whiteSpace: 'nowrap',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                }}
+                              >
+                                {exIdx + 1}. {meta?.title || re.exerciseId}
+                              </div>
+                              <div
+                                style={{
+                                  fontSize: 11,
+                                  color: 'var(--hevy-text-muted)',
+                                }}
+                              >
+                                {meta
+                                  ? MUSCLE_LABELS[meta.muscle_group] ||
+                                    meta.muscle_group
+                                  : 'Exercício'}
+                              </div>
                             </div>
                           </div>
 
@@ -4474,8 +4374,14 @@ export const App: React.FC = () => {
                             const newSet: WorkoutSet = {
                               id: `rs-${Date.now()}-${re.sets.length + 1}`,
                               type: 'normal',
-                              weightKg: lastSet ? lastSet.weightKg : 40,
-                              reps: lastSet ? lastSet.reps : 10,
+                              weightKg:
+                                lastSet && lastSet.weightKg !== null
+                                  ? lastSet.weightKg
+                                  : 0,
+                              reps:
+                                lastSet && lastSet.reps !== null
+                                  ? lastSet.reps
+                                  : 10,
                               rpe: 8,
                               completed: false,
                             };
@@ -4524,13 +4430,16 @@ export const App: React.FC = () => {
         {/* ==================== MODALS ==================== */}
         {showAuthModal && (
           <AuthModal
-            session={authSession}
-            syncStatus={syncStatus}
+            user={authUser}
+            status={syncStatus}
+            configured={isCloudConfigured}
+            lastSyncedAt={lastSyncedAt}
             onClose={() => setShowAuthModal(false)}
-            onLogin={handleLogin}
-            onRegister={handleRegister}
-            onLogout={handleLogout}
-            onForceSync={pullFromCloud}
+            onLogin={handleSupabaseLogin}
+            onRegister={handleSupabaseRegister}
+            onRequestPasswordReset={handleSupabaseResetPassword}
+            onLogout={handleSupabaseLogout}
+            onForceSync={handleForceSync}
           />
         )}
 
@@ -4560,7 +4469,7 @@ export const App: React.FC = () => {
                   exercises: [
                     ...buildingRoutine.exercises,
                     {
-                      id: `re-${Date.now()}`,
+                      id: `re-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
                       exerciseId: ex.id,
                       notes: '',
                       restTimerSeconds: DEFAULT_REST_SECONDS, // Default 60s (01:00)
@@ -4569,7 +4478,7 @@ export const App: React.FC = () => {
                         {
                           id: `rs-1-${Date.now()}`,
                           type: 'normal',
-                          weightKg: 40,
+                          weightKg: 0,
                           reps: 10,
                           rpe: 8,
                           completed: false,
@@ -4577,7 +4486,7 @@ export const App: React.FC = () => {
                         {
                           id: `rs-2-${Date.now()}`,
                           type: 'normal',
-                          weightKg: 40,
+                          weightKg: 0,
                           reps: 10,
                           rpe: 8.5,
                           completed: false,
@@ -4585,7 +4494,7 @@ export const App: React.FC = () => {
                         {
                           id: `rs-3-${Date.now()}`,
                           type: 'normal',
-                          weightKg: 40,
+                          weightKg: 0,
                           reps: 10,
                           rpe: 9,
                           completed: false,
@@ -4594,6 +4503,7 @@ export const App: React.FC = () => {
                     },
                   ],
                 });
+                setPickerTarget(null);
               }
             }}
           />
