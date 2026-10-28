@@ -1361,40 +1361,6 @@ export const App: React.FC = () => {
           <TataganLogo theme={theme} size={25} />
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-            {/* Cloud Account & Sync Button */}
-            <button
-              type="button"
-              onClick={() => setShowAuthModal(true)}
-              title={
-                authSession
-                  ? `Conectado como ${authSession.email}`
-                  : 'Entrar ou Criar Conta para sincronizar Mobile/Desktop'
-              }
-              style={{
-                border: '1px solid var(--hevy-border)',
-                background: authSession
-                  ? 'var(--hevy-green-soft)'
-                  : 'var(--hevy-blue-soft)',
-                color: authSession ? 'var(--hevy-green)' : 'var(--hevy-blue)',
-                borderRadius: 999,
-                padding: '6px 11px',
-                fontSize: 11,
-                fontWeight: 700,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 5,
-              }}
-            >
-              <Cloud size={14} />
-              <span>
-                {authSession
-                  ? syncStatus === 'syncing'
-                    ? 'Sinc...'
-                    : 'Nuvem Ativa'
-                  : 'Entrar / Conta'}
-              </span>
-            </button>
-
             {/* Sound Selector */}
             <button
               type="button"
