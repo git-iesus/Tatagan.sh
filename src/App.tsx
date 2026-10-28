@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   Home,
   Dumbbell,
@@ -15,6 +15,7 @@ import {
   ChevronDown,
   ChevronUp,
   Trash2,
+  Pencil,
   Disc,
   Volume2,
   Sun,
@@ -29,6 +30,9 @@ import {
   Edit3,
   Flame,
   TrendingUp,
+  Cloud,
+  LogOut,
+  RotateCcw,
 } from 'lucide-react';
 import exercisesRaw from './data/exercises.json';
 import {
@@ -42,6 +46,7 @@ import {
   UserProfile,
 } from './types';
 import {
+  DEFAULT_REST_SECONDS,
   INITIAL_ROUTINES,
   INITIAL_WORKOUT_HISTORY,
   INITIAL_MEASUREMENTS,
@@ -62,12 +67,21 @@ import {
   HevySoundName,
   TIMER_SOUND_OPTIONS,
 } from './utils/sound';
+import {
+  AuthSession,
+  CloudUserPayload,
+  deriveUserCredentials,
+  fetchCloudRecord,
+  pushCloudRecord,
+  mergeUserPayloads,
+} from './utils/cloudSync';
 import { TataganLogo } from './components/TataganLogo';
 import { MuscleHeatmap } from './components/MuscleHeatmap';
 import { PlateCalculatorModal } from './components/PlateCalculatorModal';
 import { ExerciseDetailModal } from './components/ExerciseDetailModal';
 import { ExercisePickerModal } from './components/ExercisePickerModal';
 import { WorkoutSummaryModal } from './components/WorkoutSummaryModal';
+import { AuthModal } from './components/AuthModal';
 
 type NavTab = 'feed' | 'workout' | 'week' | 'exercises' | 'profile';
 
@@ -88,6 +102,7 @@ const STORAGE_KEYS = {
   activeWorkout: 'tatagan_active_workout_v3',
   timerSound: 'tatagan_timer_sound_v3',
   theme: 'tatagan_theme_v3',
+  authSession: 'tatagan_auth_session_v3',
 };
 
 const SET_TYPE_CONFIG: Record<
@@ -136,6 +151,8 @@ const MAJOR_MUSCLE_GROUPS: string[] = [
   'abdominals',
 ];
 
+const REST_PRESETS = [30, 60, 90, 120, 180];
+
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<NavTab>('workout');
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
@@ -155,6 +172,18 @@ export const App: React.FC = () => {
     const saved = localStorage.getItem(STORAGE_KEYS.weekStartsOn);
     return saved === '0' ? 0 : 1;
   });
+
+  // Cloud Authentication Session State
+  const [authSession, setAuthSession] = useState<AuthSession | null>(() => {
+    const saved = localStorage.getItem(STORAGE_KEYS.authSession);
+    return saved ? JSON.parse(saved) : null;
+  });
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<
+    'idle' | 'syncing' | 'synced' | 'error'
+  >('idle');
+  const isApplyingRemoteRef = useRef(false);
+  const lastAppliedTimestampRef = useRef<number>(0);
 
   // User Profile State
   const [userProfile, setUserProfile] = useState<UserProfile>(() => {
@@ -198,9 +227,9 @@ export const App: React.FC = () => {
   const [workoutSheetExpanded, setWorkoutSheetExpanded] = useState(true);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
-  // Rest Timer State
+  // Rest Timer State — Default is 60 seconds (01:00)
   const [restRemaining, setRestRemaining] = useState<number>(0);
-  const [restTotal, setRestTotal] = useState<number>(90);
+  const [restTotal, setRestTotal] = useState<number>(DEFAULT_REST_SECONDS);
 
   // Modals State
   const [inspectExercise, setInspectExercise] = useState<Exercise | null>(null);
@@ -214,8 +243,10 @@ export const App: React.FC = () => {
   const [completedSummary, setCompletedSummary] =
     useState<CompletedWorkout | null>(null);
 
-  // Routine Builder Modal State
+  // Routine Builder / Editor Modal State
   const [buildingRoutine, setBuildingRoutine] = useState<Routine | null>(null);
+  const [isEditingExistingRoutine, setIsEditingExistingRoutine] =
+    useState<boolean>(false);
 
   // CSV File Input Ref
   const csvInputRef = useRef<HTMLInputElement | null>(null);
@@ -288,6 +319,17 @@ export const App: React.FC = () => {
   }, [measurements]);
 
   useEffect(() => {
+    if (authSession) {
+      localStorage.setItem(
+        STORAGE_KEYS.authSession,
+        JSON.stringify(authSession)
+      );
+    } else {
+      localStorage.removeItem(STORAGE_KEYS.authSession);
+    }
+  }, [authSession]);
+
+  useEffect(() => {
     if (activeWorkout) {
       localStorage.setItem(
         STORAGE_KEYS.activeWorkout,
@@ -297,6 +339,238 @@ export const App: React.FC = () => {
       localStorage.removeItem(STORAGE_KEYS.activeWorkout);
     }
   }, [activeWorkout]);
+
+  // ==================== CLOUD SYNC ENGINE (DESKTOP <-> MOBILE) ====================
+  const getCurrentLocalPayload = useCallback((): CloudUserPayload => {
+    return {
+      routines,
+      workouts,
+      measurements,
+      customExercises,
+      userProfile,
+      weekStartsOn,
+      timerSound,
+      defaultRestSeconds: DEFAULT_REST_SECONDS,
+    };
+  }, [
+    routines,
+    workouts,
+    measurements,
+    customExercises,
+    userProfile,
+    weekStartsOn,
+    timerSound,
+  ]);
+
+  const applyCloudPayloadToState = useCallback((payload: CloudUserPayload) => {
+    isApplyingRemoteRef.current = true;
+    setRoutines(payload.routines || INITIAL_ROUTINES);
+    setWorkouts(payload.workouts || []);
+    setMeasurements(payload.measurements || []);
+    setCustomExercises(payload.customExercises || []);
+    if (payload.userProfile) {
+      setUserProfile(payload.userProfile);
+    }
+    if (payload.weekStartsOn === 0 || payload.weekStartsOn === 1) {
+      setWeekStartsOn(payload.weekStartsOn);
+    }
+    if (payload.timerSound) {
+      setTimerSound(payload.timerSound);
+    }
+    setTimeout(() => {
+      isApplyingRemoteRef.current = false;
+    }, 300);
+  }, []);
+
+  // Push local changes automatically when logged in
+  useEffect(() => {
+    if (!authSession || isApplyingRemoteRef.current) return;
+
+    const timer = window.setTimeout(async () => {
+      setSyncStatus('syncing');
+      try {
+        const updatedAt = await pushCloudRecord(
+          authSession,
+          getCurrentLocalPayload()
+        );
+        lastAppliedTimestampRef.current = updatedAt;
+        setAuthSession((prev) =>
+          prev ? { ...prev, lastSyncedAt: updatedAt } : null
+        );
+        setSyncStatus('synced');
+      } catch {
+        setSyncStatus('error');
+      }
+    }, 600);
+
+    return () => clearTimeout(timer);
+  }, [
+    routines,
+    workouts,
+    measurements,
+    customExercises,
+    userProfile,
+    weekStartsOn,
+    timerSound,
+    authSession,
+    getCurrentLocalPayload,
+  ]);
+
+  // Pull remote changes on window focus / visibilitychange / interval
+  const pullFromCloud = useCallback(async () => {
+    if (!authSession) return;
+    setSyncStatus('syncing');
+    try {
+      const remoteRecord = await fetchCloudRecord(
+        authSession.topic,
+        authSession.userId
+      );
+      if (
+        remoteRecord &&
+        remoteRecord.payload &&
+        remoteRecord.updatedAt > lastAppliedTimestampRef.current
+      ) {
+        lastAppliedTimestampRef.current = remoteRecord.updatedAt;
+        applyCloudPayloadToState(remoteRecord.payload);
+        setAuthSession((prev) =>
+          prev ? { ...prev, lastSyncedAt: remoteRecord.updatedAt } : null
+        );
+      }
+      setSyncStatus('synced');
+    } catch {
+      setSyncStatus('error');
+    }
+  }, [authSession, applyCloudPayloadToState]);
+
+  useEffect(() => {
+    if (!authSession) return;
+    pullFromCloud();
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        pullFromCloud();
+      }
+    };
+    window.addEventListener('focus', pullFromCloud);
+    document.addEventListener('visibilitychange', handleVisibility);
+    const interval = window.setInterval(pullFromCloud, 18000);
+
+    return () => {
+      window.removeEventListener('focus', pullFromCloud);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      clearInterval(interval);
+    };
+  }, [authSession, pullFromCloud]);
+
+  // Login Handler (with Automatic Local Data Migration)
+  const handleLogin = async (
+    email: string,
+    password: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    setSyncStatus('syncing');
+    const { userId, cleanEmail, topic, passwordHash } =
+      await deriveUserCredentials(email, password);
+
+    const existingRecord = await fetchCloudRecord(topic, userId);
+
+    if (!existingRecord) {
+      setSyncStatus('idle');
+      return {
+        ok: false,
+        error:
+          'Conta não encontrada para este e-mail. Use a aba "Cadastro" para criar sua conta.',
+      };
+    }
+
+    if (existingRecord.passwordHash !== passwordHash) {
+      setSyncStatus('error');
+      return {
+        ok: false,
+        error: 'Senha incorreta para este e-mail.',
+      };
+    }
+
+    // Merge local pre-login data with remote cloud account data so no history or routine is lost
+    const localPayload = getCurrentLocalPayload();
+    const mergedPayload = existingRecord.payload
+      ? mergeUserPayloads(localPayload, existingRecord.payload)
+      : localPayload;
+
+    applyCloudPayloadToState(mergedPayload);
+
+    const newSession: AuthSession = {
+      userId,
+      email: cleanEmail,
+      passwordHash,
+      topic,
+      lastSyncedAt: Date.now(),
+    };
+    const updatedAt = await pushCloudRecord(newSession, mergedPayload);
+    lastAppliedTimestampRef.current = updatedAt;
+    setAuthSession({ ...newSession, lastSyncedAt: updatedAt });
+    setSyncStatus('synced');
+    return { ok: true };
+  };
+
+  // Register Handler (with Automatic Local Data Migration)
+  const handleRegister = async (
+    email: string,
+    password: string,
+    displayName: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    setSyncStatus('syncing');
+    const { userId, cleanEmail, topic, passwordHash } =
+      await deriveUserCredentials(email, password);
+
+    const existingRecord = await fetchCloudRecord(topic, userId);
+    if (existingRecord && existingRecord.passwordHash !== passwordHash) {
+      setSyncStatus('error');
+      return {
+        ok: false,
+        error:
+          'Este e-mail já está cadastrado. Use a aba "Login" com a senha correta.',
+      };
+    }
+
+    const handleFromEmail = cleanEmail
+      .split('@')[0]
+      .replace(/[^a-z0-9_]/gi, '_');
+    const newProfile: UserProfile = {
+      displayName: displayName.trim(),
+      username: handleFromEmail || 'atleta_tatagan',
+    };
+
+    const localPayload: CloudUserPayload = {
+      ...getCurrentLocalPayload(),
+      userProfile: newProfile,
+    };
+
+    const finalPayload = existingRecord?.payload
+      ? mergeUserPayloads(localPayload, existingRecord.payload)
+      : localPayload;
+
+    finalPayload.userProfile = newProfile;
+    applyCloudPayloadToState(finalPayload);
+
+    const newSession: AuthSession = {
+      userId,
+      email: cleanEmail,
+      passwordHash,
+      topic,
+      lastSyncedAt: Date.now(),
+    };
+
+    const updatedAt = await pushCloudRecord(newSession, finalPayload);
+    lastAppliedTimestampRef.current = updatedAt;
+    setAuthSession({ ...newSession, lastSyncedAt: updatedAt });
+    setSyncStatus('synced');
+    return { ok: true };
+  };
+
+  const handleLogout = () => {
+    setAuthSession(null);
+    setSyncStatus('idle');
+  };
 
   // Live Workout Elapsed Timer
   useEffect(() => {
@@ -363,6 +637,7 @@ export const App: React.FC = () => {
       ? routine.exercises.map((re: WorkoutExercise, idx: number) => ({
           ...re,
           id: `live-ex-${Date.now()}-${idx}`,
+          restTimerSeconds: re.restTimerSeconds || DEFAULT_REST_SECONDS,
           sets: re.sets.map((s: WorkoutSet, sIdx: number) => ({
             ...s,
             id: `live-set-${Date.now()}-${idx}-${sIdx}`,
@@ -379,6 +654,7 @@ export const App: React.FC = () => {
     };
     setActiveWorkout(session);
     setWorkoutSheetExpanded(true);
+    setRestTotal(DEFAULT_REST_SECONDS);
     playHevySound('set_complete_low');
   };
 
@@ -414,7 +690,7 @@ export const App: React.FC = () => {
       id: `live-ex-${Date.now()}`,
       exerciseId: exercise.id,
       notes: '',
-      restTimerSeconds: 90,
+      restTimerSeconds: DEFAULT_REST_SECONDS, // Default 60s (01:00)
       supersetGroup: null,
       sets: defaultSets,
     };
@@ -484,8 +760,9 @@ export const App: React.FC = () => {
         playHevySound('set_complete_high');
       }
 
-      setRestTotal(exInstance.restTimerSeconds || 90);
-      setRestRemaining(exInstance.restTimerSeconds || 90);
+      const targetRest = exInstance.restTimerSeconds || DEFAULT_REST_SECONDS;
+      setRestTotal(targetRest);
+      setRestRemaining(targetRest);
     }
   };
 
@@ -628,6 +905,7 @@ export const App: React.FC = () => {
     setWorkouts([finalized, ...workouts]);
     setActiveWorkout(null);
     setRestRemaining(0);
+    setRestTotal(DEFAULT_REST_SECONDS);
     setCompletedSummary(finalized);
     setActiveTab('feed');
   };
@@ -637,19 +915,67 @@ export const App: React.FC = () => {
     setWorkouts((prev) => prev.filter((w) => w.id !== workoutId));
   };
 
+  // Open Routine Modal in Edit Mode (deep clone so cancel doesn't mutate)
+  const handleOpenEditRoutine = (routine: Routine) => {
+    const cloned: Routine = JSON.parse(JSON.stringify(routine));
+    // Ensure every exercise has restTimerSeconds (defaulting to 60s)
+    cloned.exercises = cloned.exercises.map((ex) => ({
+      ...ex,
+      restTimerSeconds: ex.restTimerSeconds || DEFAULT_REST_SECONDS,
+    }));
+    setIsEditingExistingRoutine(true);
+    setBuildingRoutine(cloned);
+  };
+
+  // Open Routine Modal in Create Mode
+  const handleOpenCreateRoutine = () => {
+    setIsEditingExistingRoutine(false);
+    setBuildingRoutine({
+      id: `routine-${Date.now()}`,
+      title: 'Nova Rotina Hipertrofia',
+      folderId: 'folder-ppl',
+      notes: '',
+      lastPerformed: 'Criada no Tatagan.sh',
+      exercises: [],
+    });
+  };
+
+  // Save Routine (either updates existing routine in-place preserving `id`, or adds new routine)
+  const handleSaveBuildingRoutine = () => {
+    if (!buildingRoutine) return;
+    if (!buildingRoutine.title.trim()) {
+      alert('Informe um nome para a rotina!');
+      return;
+    }
+    if (buildingRoutine.exercises.length === 0) {
+      alert('Adicione pelo menos 1 exercício à rotina!');
+      return;
+    }
+
+    if (isEditingExistingRoutine) {
+      setRoutines((prev) =>
+        prev.map((r) => (r.id === buildingRoutine.id ? buildingRoutine : r))
+      );
+    } else {
+      setRoutines((prev) => [buildingRoutine, ...prev]);
+    }
+
+    setBuildingRoutine(null);
+    setIsEditingExistingRoutine(false);
+  };
+
   // ==================== CSV TEMPLATE DOWNLOAD (BUTTON A) & IMPORT (BUTTON B) ====================
   const handleDownloadCsvTemplate = () => {
     const csvRows = [
       'nome_rotina;exercicio;tipo_serie;peso_kg;repeticoes;descanso_seg;notas',
-      'Treino A - Superior;Supino Reto (Barra);warmup;40;12;90;Aquecimento articular controlado',
-      'Treino A - Superior;Supino Reto (Barra);normal;80;10;120;Série principal',
-      'Treino A - Superior;Supino Reto (Barra);normal;85;8;120;Progressão de carga',
-      'Treino A - Superior;Puxada Alta (Cabo);normal;65;10;90;Pegada aberta pronada',
-      'Treino A - Superior;Puxada Alta (Cabo);normal;70;8;90;Segurar 1s na contração',
-      'Treino A - Superior;Desenvolvimento (Halter);normal;24;10;90;Core firme',
+      'Treino A - Superior;Supino Reto (Barra);warmup;40;12;60;Aquecimento articular controlado',
+      'Treino A - Superior;Supino Reto (Barra);normal;80;10;60;Série principal',
+      'Treino A - Superior;Supino Reto (Barra);normal;85;8;60;Progressão de carga',
+      'Treino A - Superior;Puxada Alta (Cabo);normal;65;10;60;Pegada aberta pronada',
+      'Treino A - Superior;Puxada Alta (Cabo);normal;70;8;60;Segurar 1s na contração',
+      'Treino A - Superior;Desenvolvimento (Halter);normal;24;10;60;Core firme',
       'Treino A - Superior;Elevação Lateral (Halter);dropset;12;15;60;Até a falha técnica',
     ];
-    // UTF-8 BOM (\uFEFF) ensures Microsoft Excel opens accents and columns properly
     const blob = new Blob(['\uFEFF' + csvRows.join('\r\n')], {
       type: 'text/csv;charset=utf-8;',
     });
@@ -681,7 +1007,6 @@ export const App: React.FC = () => {
         return;
       }
 
-      // Auto-detect delimiter (`;` for PT-BR Excel or `,` for standard CSV)
       const headerLine = lines[0];
       const delimiter =
         headerLine.split(';').length >= headerLine.split(',').length ? ';' : ',';
@@ -768,15 +1093,16 @@ export const App: React.FC = () => {
         }
 
         const rawWeight = (idxWeight >= 0 ? cols[idxWeight] : cols[3]) || '0';
-        const weightKg =
-          parseFloat(rawWeight.replace(',', '.')) || 0;
+        const weightKg = parseFloat(rawWeight.replace(',', '.')) || 0;
         const rawReps = (idxReps >= 0 ? cols[idxReps] : cols[4]) || '10';
         const reps = parseInt(rawReps, 10) || 10;
-        const rawRest = (idxRest >= 0 ? cols[idxRest] : cols[5]) || '90';
-        const restSeconds = parseInt(rawRest, 10) || 90;
+        const rawRest = (idxRest >= 0 ? cols[idxRest] : cols[5]) || '';
+        const restSeconds =
+          parseInt(rawRest, 10) > 0
+            ? parseInt(rawRest, 10)
+            : DEFAULT_REST_SECONDS; // Defaults to 60s (01:00)
         const notes = (idxNotes >= 0 ? cols[idxNotes] : cols[6]) || '';
 
-        // Match exercise in catalog or newly created custom exercises
         const targetNorm = normalizeText(exerciseName);
         let matchedExercise =
           allExercises.find(
@@ -921,7 +1247,7 @@ export const App: React.FC = () => {
   // ==================== WEEK TAB ANALYTICS ====================
   const weeklyReport = useMemo(() => {
     const now = new Date();
-    const currentDay = now.getDay(); // 0 (Sun) to 6 (Sat)
+    const currentDay = now.getDay();
     const diffToStart = (currentDay - weekStartsOn + 7) % 7;
 
     const startOfWeek = new Date(now);
@@ -958,7 +1284,6 @@ export const App: React.FC = () => {
       exerciseMap
     );
 
-    // Compute volume per muscle group for detailed physique report
     const weekMuscleVolume: Record<string, number> = {};
     weekExercises.forEach((ex) => {
       const meta = exerciseMap[ex.exerciseId];
@@ -972,7 +1297,6 @@ export const App: React.FC = () => {
       weekMuscleVolume[m] = (weekMuscleVolume[m] || 0) + v;
     });
 
-    // Build 7-day breakdown array
     const dayLabelsSun = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
     const days = Array.from({ length: 7 }, (_, i) => {
       const d = new Date(startOfWeek);
@@ -1034,9 +1358,43 @@ export const App: React.FC = () => {
       <div className="hevy-mobile-shell">
         {/* TOP HEADER */}
         <header className="hevy-header">
-          <TataganLogo theme={theme} size={26} />
+          <TataganLogo theme={theme} size={25} />
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            {/* Cloud Account & Sync Button */}
+            <button
+              type="button"
+              onClick={() => setShowAuthModal(true)}
+              title={
+                authSession
+                  ? `Conectado como ${authSession.email}`
+                  : 'Entrar ou Criar Conta para sincronizar Mobile/Desktop'
+              }
+              style={{
+                border: '1px solid var(--hevy-border)',
+                background: authSession
+                  ? 'var(--hevy-green-soft)'
+                  : 'var(--hevy-blue-soft)',
+                color: authSession ? 'var(--hevy-green)' : 'var(--hevy-blue)',
+                borderRadius: 999,
+                padding: '6px 11px',
+                fontSize: 11,
+                fontWeight: 700,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 5,
+              }}
+            >
+              <Cloud size={14} />
+              <span>
+                {authSession
+                  ? syncStatus === 'syncing'
+                    ? 'Sinc...'
+                    : 'Nuvem Ativa'
+                  : 'Entrar / Conta'}
+              </span>
+            </button>
+
             {/* Sound Selector */}
             <button
               type="button"
@@ -1258,7 +1616,13 @@ export const App: React.FC = () => {
                           </div>
                         </div>
 
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                          }}
+                        >
                           <button
                             type="button"
                             className="hevy-btn-secondary"
@@ -1689,7 +2053,7 @@ export const App: React.FC = () => {
             </div>
           )}
 
-          {/* ==================== TAB 2: WORKOUT & ROUTINES (+ CSV TEMPLATE & IMPORT) ==================== */}
+          {/* ==================== TAB 2: WORKOUT & ROUTINES (+ EDIT & CSV) ==================== */}
           {activeTab === 'workout' && (
             <div
               style={{
@@ -1745,7 +2109,7 @@ export const App: React.FC = () => {
                         color: 'var(--hevy-text-secondary)',
                       }}
                     >
-                      Baixe o modelo (A), preencha seus exercícios e importe (B)
+                      Baixe o modelo (A), preencha seus exercícios (descanso padrão: 60s) e importe (B)
                     </div>
                   </div>
                 </div>
@@ -1765,7 +2129,6 @@ export const App: React.FC = () => {
                     gap: 8,
                   }}
                 >
-                  {/* Botão (A): Baixar Planilha Modelo */}
                   <button
                     type="button"
                     className="hevy-btn-secondary"
@@ -1776,7 +2139,6 @@ export const App: React.FC = () => {
                     <span>(A) Baixar Modelo</span>
                   </button>
 
-                  {/* Botão (B): Importar Planilha Preenchida */}
                   <button
                     type="button"
                     className="hevy-btn-primary"
@@ -1810,14 +2172,7 @@ export const App: React.FC = () => {
                   type="button"
                   className="hevy-btn-secondary"
                   style={{ padding: '7px 12px', fontSize: 12 }}
-                  onClick={() =>
-                    setBuildingRoutine({
-                      id: `routine-${Date.now()}`,
-                      title: 'Nova Rotina Hipertrofia',
-                      folderId: 'folder-ppl',
-                      exercises: [],
-                    })
-                  }
+                  onClick={handleOpenCreateRoutine}
                 >
                   <FolderPlus size={14} /> Nova Manual
                 </button>
@@ -1841,9 +2196,10 @@ export const App: React.FC = () => {
                           display: 'flex',
                           justifyContent: 'space-between',
                           alignItems: 'flex-start',
+                          gap: 8,
                         }}
                       >
-                        <div>
+                        <div style={{ minWidth: 0 }}>
                           <span
                             style={{
                               fontSize: 10,
@@ -1860,23 +2216,58 @@ export const App: React.FC = () => {
                             {routine.title}
                           </h3>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setRoutines((prev) =>
-                              prev.filter((r) => r.id !== routine.id)
-                            )
-                          }
+
+                        {/* Action Icons: Pencil (Edit) immediately to the left of Trash (Delete) */}
+                        <div
                           style={{
-                            background: 'none',
-                            border: 'none',
-                            color: 'var(--hevy-text-muted)',
-                            padding: 4,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            flexShrink: 0,
                           }}
-                          title="Excluir rotina"
                         >
-                          <Trash2 size={15} />
-                        </button>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditRoutine(routine)}
+                            style={{
+                              background: 'var(--hevy-elevated)',
+                              border: '1px solid var(--hevy-border)',
+                              borderRadius: 8,
+                              color: 'var(--hevy-blue)',
+                              width: 32,
+                              height: 32,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                            }}
+                            title="Editar rotina"
+                          >
+                            <Pencil size={15} />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setRoutines((prev) =>
+                                prev.filter((r) => r.id !== routine.id)
+                              )
+                            }
+                            style={{
+                              background: 'var(--hevy-elevated)',
+                              border: '1px solid var(--hevy-border)',
+                              borderRadius: 8,
+                              color: 'var(--hevy-text-muted)',
+                              width: 32,
+                              height: 32,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                            }}
+                            title="Excluir rotina"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
                       </div>
 
                       <div
@@ -1891,7 +2282,9 @@ export const App: React.FC = () => {
                             (re: WorkoutExercise) =>
                               `${
                                 exerciseMap[re.exerciseId]?.title || 'Exercício'
-                              } (${re.sets.length}x)`
+                              } (${re.sets.length}x • ${
+                                re.restTimerSeconds || DEFAULT_REST_SECONDS
+                              }s)`
                           )
                           .join(' • ')}
                       </div>
@@ -1939,7 +2332,6 @@ export const App: React.FC = () => {
                 gap: 14,
               }}
             >
-              {/* Week Header & Start Day Selector */}
               <div
                 className="hevy-card"
                 style={{
@@ -1995,7 +2387,9 @@ export const App: React.FC = () => {
                         fontSize: 11,
                         fontWeight: 700,
                         backgroundColor:
-                          weekStartsOn === 0 ? 'var(--hevy-blue)' : 'transparent',
+                          weekStartsOn === 0
+                            ? 'var(--hevy-blue)'
+                            : 'transparent',
                         color:
                           weekStartsOn === 0
                             ? '#FFF'
@@ -2014,7 +2408,9 @@ export const App: React.FC = () => {
                         fontSize: 11,
                         fontWeight: 700,
                         backgroundColor:
-                          weekStartsOn === 1 ? 'var(--hevy-blue)' : 'transparent',
+                          weekStartsOn === 1
+                            ? 'var(--hevy-blue)'
+                            : 'transparent',
                         color:
                           weekStartsOn === 1
                             ? '#FFF'
@@ -2026,7 +2422,7 @@ export const App: React.FC = () => {
                   </div>
                 </div>
 
-                {/* 7-Day Frequency & Volume Bar Strip */}
+                {/* 7-Day Frequency Strip */}
                 <div
                   style={{
                     display: 'grid',
@@ -2111,7 +2507,11 @@ export const App: React.FC = () => {
                     }}
                   >
                     <div
-                      style={{ fontSize: 9, color: 'var(--hevy-text-muted)', fontWeight: 700 }}
+                      style={{
+                        fontSize: 9,
+                        color: 'var(--hevy-text-muted)',
+                        fontWeight: 700,
+                      }}
                     >
                       TREINOS
                     </div>
@@ -2135,7 +2535,11 @@ export const App: React.FC = () => {
                     }}
                   >
                     <div
-                      style={{ fontSize: 9, color: 'var(--hevy-text-muted)', fontWeight: 700 }}
+                      style={{
+                        fontSize: 9,
+                        color: 'var(--hevy-text-muted)',
+                        fontWeight: 700,
+                      }}
                     >
                       VOLUME
                     </div>
@@ -2159,7 +2563,11 @@ export const App: React.FC = () => {
                     }}
                   >
                     <div
-                      style={{ fontSize: 9, color: 'var(--hevy-text-muted)', fontWeight: 700 }}
+                      style={{
+                        fontSize: 9,
+                        color: 'var(--hevy-text-muted)',
+                        fontWeight: 700,
+                      }}
                     >
                       SÉRIES
                     </div>
@@ -2183,7 +2591,11 @@ export const App: React.FC = () => {
                     }}
                   >
                     <div
-                      style={{ fontSize: 9, color: 'var(--hevy-text-muted)', fontWeight: 700 }}
+                      style={{
+                        fontSize: 9,
+                        color: 'var(--hevy-text-muted)',
+                        fontWeight: 700,
+                      }}
                     >
                       TEMPO
                     </div>
@@ -2202,14 +2614,22 @@ export const App: React.FC = () => {
               </div>
 
               {/* Anatomical Physique Impact Map for the Present Week */}
-              <div className="hevy-card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div
+                className="hevy-card"
+                style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
+              >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <Flame size={18} color="var(--hevy-blue)" />
                   <div>
                     <h3 style={{ fontSize: 15, fontWeight: 700 }}>
                       Impacto no Físico na Semana Atual
                     </h3>
-                    <p style={{ fontSize: 11, color: 'var(--hevy-text-secondary)' }}>
+                    <p
+                      style={{
+                        fontSize: 11,
+                        color: 'var(--hevy-text-secondary)',
+                      }}
+                    >
                       Músculos ativados pelos treinos acumulados desde{' '}
                       {weekStartsOn === 0 ? 'domingo' : 'segunda-feira'}
                     </p>
@@ -2233,8 +2653,14 @@ export const App: React.FC = () => {
                     <h3 style={{ fontSize: 15, fontWeight: 700 }}>
                       Resultado Físico por Grupamento Muscular
                     </h3>
-                    <p style={{ fontSize: 11, color: 'var(--hevy-text-secondary)' }}>
-                      Análise de volume semanal efetivo (meta de hipertrofia: 10 a 20 séries/semana)
+                    <p
+                      style={{
+                        fontSize: 11,
+                        color: 'var(--hevy-text-secondary)',
+                      }}
+                    >
+                      Análise de volume semanal efetivo (meta de hipertrofia: 10
+                      a 20 séries/semana)
                     </p>
                   </div>
                 </div>
@@ -2250,10 +2676,18 @@ export const App: React.FC = () => {
                       color: 'var(--hevy-text-secondary)',
                     }}
                   >
-                    Nenhum estímulo muscular registrado nesta semana ainda. Finalize um treino para visualizar o relatório de impacto no físico!
+                    Nenhum estímulo muscular registrado nesta semana ainda.
+                    Finalize um treino para visualizar o relatório de impacto no
+                    físico!
                   </div>
                 ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 10,
+                    }}
+                  >
                     {Object.entries(weeklyReport.weekMuscleCounts)
                       .sort((a, b) => b[1] - a[1])
                       .map(([muscle, sets]) => {
@@ -2303,7 +2737,6 @@ export const App: React.FC = () => {
                               </span>
                             </div>
 
-                            {/* Progress Bar */}
                             <div
                               style={{
                                 width: '100%',
@@ -2337,7 +2770,6 @@ export const App: React.FC = () => {
                   </div>
                 )}
 
-                {/* Untrained Major Muscles Alert */}
                 {weeklyReport.untrainedMuscles.length > 0 && (
                   <div
                     style={{
@@ -2551,7 +2983,7 @@ export const App: React.FC = () => {
             </div>
           )}
 
-          {/* ==================== TAB 5: PROFILE (EDITABLE USERNAME & FACTUAL VOLUME) ==================== */}
+          {/* ==================== TAB 5: PROFILE (CLOUD SYNC, USERNAME & FACTUAL VOLUME) ==================== */}
           {activeTab === 'profile' && (
             <div
               style={{
@@ -2561,6 +2993,103 @@ export const App: React.FC = () => {
                 gap: 14,
               }}
             >
+              {/* Cloud Account & Mobile/Desktop Sync Card */}
+              <div
+                className="hevy-card"
+                style={{
+                  background: authSession
+                    ? 'linear-gradient(135deg, rgba(42,204,88,0.14) 0%, rgba(28,28,30,0.96) 100%)'
+                    : 'linear-gradient(135deg, rgba(0,140,255,0.16) 0%, rgba(28,28,30,0.96) 100%)',
+                  borderColor: authSession
+                    ? 'rgba(42,204,88,0.35)'
+                    : 'rgba(0,140,255,0.35)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 700,
+                      color: authSession
+                        ? 'var(--hevy-green)'
+                        : 'var(--hevy-blue)',
+                      textTransform: 'uppercase',
+                    }}
+                  >
+                    {authSession
+                      ? 'SINCRONIZAÇÃO EM NUVEM ATIVA'
+                      : 'SINCRONIZAÇÃO MOBILE / DESKTOP'}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 15,
+                      fontWeight: 700,
+                      marginTop: 2,
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {authSession
+                      ? authSession.email
+                      : 'Acesse no celular e no computador'}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: 'var(--hevy-text-secondary)',
+                      marginTop: 2,
+                    }}
+                  >
+                    {authSession
+                      ? `Rotinas e histórico vinculados ao ID ${authSession.userId.slice(
+                          0,
+                          10
+                        )}...`
+                      : 'Entre ou crie sua conta para sincronizar rotinas e treinos.'}
+                  </div>
+                </div>
+
+                {authSession ? (
+                  <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                    <button
+                      type="button"
+                      className="hevy-btn-secondary"
+                      style={{ padding: '8px 10px', fontSize: 12 }}
+                      onClick={() => setShowAuthModal(true)}
+                    >
+                      <Cloud size={15} color="var(--hevy-green)" /> Conta
+                    </button>
+                    <button
+                      type="button"
+                      className="hevy-btn-secondary"
+                      style={{
+                        padding: '8px 10px',
+                        fontSize: 12,
+                        color: 'var(--hevy-red)',
+                      }}
+                      onClick={handleLogout}
+                      title="Sair da conta (Logout)"
+                    >
+                      <LogOut size={15} />
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="hevy-btn-primary"
+                    style={{ padding: '9px 13px', fontSize: 12, flexShrink: 0 }}
+                    onClick={() => setShowAuthModal(true)}
+                  >
+                    <Cloud size={15} /> Entrar / Criar
+                  </button>
+                )}
+              </div>
+
               {/* Editable Profile Card */}
               <div
                 className="hevy-card"
@@ -2574,13 +3103,16 @@ export const App: React.FC = () => {
                     gap: 12,
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div
+                    style={{ display: 'flex', alignItems: 'center', gap: 12 }}
+                  >
                     <div
                       style={{
                         width: 58,
                         height: 58,
                         borderRadius: '50%',
-                        background: 'linear-gradient(135deg, #008CFF, #0051A8)',
+                        background:
+                          'linear-gradient(135deg, #008CFF, #0051A8)',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -3032,67 +3564,115 @@ export const App: React.FC = () => {
               </button>
             </div>
 
-            {restRemaining > 0 && (
-              <div
-                style={{
-                  backgroundColor: 'var(--hevy-card)',
-                  borderBottom: '1px solid var(--hevy-blue)',
-                  padding: '8px 14px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <Clock size={16} color="var(--hevy-blue)" />
-                  <div>
-                    <div
-                      style={{
-                        fontSize: 11,
-                        color: 'var(--hevy-text-secondary)',
-                      }}
-                    >
-                      TEMPO DE DESCANSO ({restTotal}s)
-                    </div>
-                    <div
-                      style={{
-                        fontSize: 16,
-                        fontWeight: 700,
-                        color: 'var(--hevy-blue)',
-                      }}
-                    >
-                      {formatTimerMMSS(restRemaining)}
-                    </div>
+            {/* Persistent Rest Timer Bar (Default 01:00 / 60s) */}
+            <div
+              style={{
+                backgroundColor: 'var(--hevy-card)',
+                borderBottom:
+                  restRemaining > 0
+                    ? '1px solid var(--hevy-blue)'
+                    : '1px solid var(--hevy-border)',
+                padding: '8px 14px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 8,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Clock
+                  size={16}
+                  color={
+                    restRemaining > 0
+                      ? 'var(--hevy-blue)'
+                      : 'var(--hevy-text-secondary)'
+                  }
+                />
+                <div>
+                  <div
+                    style={{
+                      fontSize: 10,
+                      color: 'var(--hevy-text-secondary)',
+                      fontWeight: 700,
+                    }}
+                  >
+                    CRONÔMETRO DE DESCANSO (PADRÃO 01:00)
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 15,
+                      fontWeight: 700,
+                      color:
+                        restRemaining > 0
+                          ? 'var(--hevy-blue)'
+                          : 'var(--hevy-text)',
+                    }}
+                  >
+                    {restRemaining > 0
+                      ? formatTimerMMSS(restRemaining)
+                      : formatTimerMMSS(restTotal || DEFAULT_REST_SECONDS)}
                   </div>
                 </div>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <button
-                    type="button"
-                    className="hevy-btn-secondary"
-                    style={{ padding: '5px 10px', fontSize: 12 }}
-                    onClick={() => setRestRemaining((r) => Math.max(0, r - 15))}
-                  >
-                    -15s
-                  </button>
-                  <button
-                    type="button"
-                    className="hevy-btn-secondary"
-                    style={{ padding: '5px 10px', fontSize: 12 }}
-                    onClick={() => setRestRemaining((r) => r + 15)}
-                  >
-                    +15s
-                  </button>
-                  <button
-                    type="button"
-                    className="hevy-btn-primary"
-                    style={{ padding: '5px 10px', fontSize: 12 }}
-                    onClick={() => setRestRemaining(0)}
-                  >
-                    Pular
-                  </button>
-                </div>
               </div>
-            )}
+
+              <div style={{ display: 'flex', gap: 5 }}>
+                {restRemaining > 0 ? (
+                  <>
+                    <button
+                      type="button"
+                      className="hevy-btn-secondary"
+                      style={{ padding: '5px 8px', fontSize: 11 }}
+                      onClick={() => setRestRemaining((r) => Math.max(0, r - 15))}
+                    >
+                      -15s
+                    </button>
+                    <button
+                      type="button"
+                      className="hevy-btn-secondary"
+                      style={{ padding: '5px 8px', fontSize: 11 }}
+                      onClick={() => setRestRemaining((r) => r + 15)}
+                    >
+                      +15s
+                    </button>
+                    <button
+                      type="button"
+                      className="hevy-btn-secondary"
+                      style={{ padding: '5px 8px', fontSize: 11 }}
+                      title="Resetar timer para 01:00 (ou padrão do exercício)"
+                      onClick={() =>
+                        setRestRemaining(restTotal || DEFAULT_REST_SECONDS)
+                      }
+                    >
+                      <RotateCcw size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      className="hevy-btn-primary"
+                      style={{ padding: '5px 10px', fontSize: 11 }}
+                      onClick={() => {
+                        setRestRemaining(0);
+                        setRestTotal(DEFAULT_REST_SECONDS);
+                      }}
+                    >
+                      Pular
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="hevy-btn-secondary"
+                    style={{ padding: '5px 10px', fontSize: 11 }}
+                    onClick={() => {
+                      const target = restTotal || DEFAULT_REST_SECONDS;
+                      setRestTotal(target);
+                      setRestRemaining(target);
+                    }}
+                  >
+                    <Play size={12} /> Iniciar {formatTimerMMSS(restTotal || DEFAULT_REST_SECONDS)}
+                  </button>
+                )}
+              </div>
+            </div>
 
             <div
               style={{
@@ -3108,6 +3688,8 @@ export const App: React.FC = () => {
                 const meta = exerciseMap[exInstance.exerciseId];
                 if (!meta) return null;
                 const firstWeight = exInstance.sets[0]?.weightKg || 60;
+                const exRest =
+                  exInstance.restTimerSeconds || DEFAULT_REST_SECONDS;
 
                 return (
                   <div
@@ -3188,7 +3770,44 @@ export const App: React.FC = () => {
                         </div>
                       </div>
 
-                      <div style={{ display: 'flex', gap: 6 }}>
+                      <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
+                        {/* Exercise Rest Timer Cycle Button (Defaults to 60s / 01:00) */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const curIdx = REST_PRESETS.indexOf(exRest);
+                            const nextRest =
+                              REST_PRESETS[
+                                (curIdx + 1) % REST_PRESETS.length
+                              ] || DEFAULT_REST_SECONDS;
+                            setActiveWorkout({
+                              ...activeWorkout,
+                              exercises: activeWorkout.exercises.map((item) =>
+                                item.id === exInstance.id
+                                  ? { ...item, restTimerSeconds: nextRest }
+                                  : item
+                              ),
+                            });
+                            setRestTotal(nextRest);
+                          }}
+                          title="Tempo de descanso deste exercício (toque para alterar)"
+                          style={{
+                            background: 'var(--hevy-elevated)',
+                            color: 'var(--hevy-text-secondary)',
+                            border: 'none',
+                            borderRadius: 8,
+                            padding: '6px 8px',
+                            fontSize: 11,
+                            fontWeight: 700,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 4,
+                          }}
+                        >
+                          <Clock size={12} color="var(--hevy-blue)" />
+                          {formatTimerMMSS(exRest)}
+                        </button>
+
                         <button
                           type="button"
                           onClick={() => {
@@ -3226,7 +3845,6 @@ export const App: React.FC = () => {
                           }}
                         >
                           <Link2 size={13} />
-                          {exInstance.supersetGroup ? 'Superset' : 'Bi-set'}
                         </button>
 
                         <button
@@ -3251,7 +3869,7 @@ export const App: React.FC = () => {
                             gap: 4,
                           }}
                         >
-                          <Disc size={14} /> Anilhas
+                          <Disc size={14} />
                         </button>
                       </div>
                     </div>
@@ -3453,6 +4071,7 @@ export const App: React.FC = () => {
                   if (confirm('Descartar o treino em andamento?')) {
                     setActiveWorkout(null);
                     setRestRemaining(0);
+                    setRestTotal(DEFAULT_REST_SECONDS);
                   }
                 }}
               >
@@ -3462,89 +4081,493 @@ export const App: React.FC = () => {
           </div>
         )}
 
-        {/* ==================== ROUTINE BUILDER MODAL ==================== */}
+        {/* ==================== ROUTINE CREATE / EDIT MODAL ==================== */}
         {buildingRoutine && (
           <div
             className="hevy-modal-backdrop"
-            onClick={() => setBuildingRoutine(null)}
+            onClick={() => {
+              setBuildingRoutine(null);
+              setIsEditingExistingRoutine(false);
+            }}
           >
             <div
               className="hevy-modal-sheet"
               onClick={(e) => e.stopPropagation()}
-              style={{ padding: 16, gap: 12, height: '85%' }}
+              style={{ padding: 16, gap: 12, height: '90%' }}
             >
-              <h3 style={{ fontSize: 17, fontWeight: 700 }}>Criar Nova Rotina</h3>
-              <input
-                type="text"
-                value={buildingRoutine.title}
-                onChange={(e) =>
-                  setBuildingRoutine({
-                    ...buildingRoutine,
-                    title: e.target.value,
-                  })
-                }
-                placeholder="Título da Rotina"
-                className="hevy-set-input"
-                style={{ textAlign: 'left', padding: '0 12px', height: 40 }}
-              />
+              {/* Modal Header */}
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                }}
+              >
+                <div>
+                  <h3 style={{ fontSize: 17, fontWeight: 700 }}>
+                    {isEditingExistingRoutine
+                      ? 'Editar Rotina'
+                      : 'Criar Nova Rotina'}
+                  </h3>
+                  <span
+                    style={{ fontSize: 11, color: 'var(--hevy-text-secondary)' }}
+                  >
+                    Descanso padrão: 01:00 (60s) • Ajuste séries, cargas e
+                    repetições
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="hevy-btn-secondary"
+                  style={{ padding: '6px 10px', fontSize: 12 }}
+                  onClick={() => {
+                    setBuildingRoutine(null);
+                    setIsEditingExistingRoutine(false);
+                  }}
+                >
+                  Cancelar
+                </button>
+              </div>
+
+              {/* Routine Title Input */}
+              <div>
+                <label
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: 'var(--hevy-text-secondary)',
+                  }}
+                >
+                  NOME DA ROTINA
+                </label>
+                <input
+                  type="text"
+                  value={buildingRoutine.title}
+                  onChange={(e) =>
+                    setBuildingRoutine({
+                      ...buildingRoutine,
+                      title: e.target.value,
+                    })
+                  }
+                  placeholder="Título da Rotina"
+                  className="hevy-set-input"
+                  style={{
+                    textAlign: 'left',
+                    padding: '0 12px',
+                    height: 40,
+                    marginTop: 4,
+                  }}
+                />
+              </div>
+
+              {/* Editable Exercises List inside Routine */}
               <div
                 style={{
                   flex: 1,
                   overflowY: 'auto',
                   display: 'flex',
                   flexDirection: 'column',
-                  gap: 8,
+                  gap: 12,
+                  paddingRight: 2,
                 }}
               >
-                {buildingRoutine.exercises.map((re: WorkoutExercise) => {
-                  const meta = exerciseMap[re.exerciseId];
-                  return (
-                    <div
-                      key={re.id}
-                      className="hevy-card"
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                      }}
-                    >
-                      <span style={{ fontWeight: 600, fontSize: 14 }}>
-                        {meta?.title || re.exerciseId}
-                      </span>
-                      <span style={{ fontSize: 12, color: 'var(--hevy-blue)' }}>
-                        {re.sets.length} séries
-                      </span>
-                    </div>
-                  );
-                })}
+                {buildingRoutine.exercises.map(
+                  (re: WorkoutExercise, exIdx: number) => {
+                    const meta = exerciseMap[re.exerciseId];
+                    const currentRest =
+                      re.restTimerSeconds || DEFAULT_REST_SECONDS;
+
+                    return (
+                      <div
+                        key={re.id}
+                        className="hevy-card"
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 8,
+                        }}
+                      >
+                        {/* Exercise Title + Rest Timer Selector + Remove Exercise Button */}
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            gap: 8,
+                          }}
+                        >
+                          <div style={{ minWidth: 0 }}>
+                            <div
+                              style={{
+                                fontWeight: 700,
+                                fontSize: 14,
+                                color: 'var(--hevy-blue)',
+                                whiteSpace: 'nowrap',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                              }}
+                            >
+                              {exIdx + 1}. {meta?.title || re.exerciseId}
+                            </div>
+                            <div
+                              style={{
+                                fontSize: 11,
+                                color: 'var(--hevy-text-muted)',
+                              }}
+                            >
+                              {meta
+                                ? MUSCLE_LABELS[meta.muscle_group] ||
+                                  meta.muscle_group
+                                : 'Exercício'}
+                            </div>
+                          </div>
+
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 6,
+                              flexShrink: 0,
+                            }}
+                          >
+                            {/* Rest Seconds Input (Defaults to 60s) */}
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 4,
+                                backgroundColor: 'var(--hevy-elevated)',
+                                padding: '4px 8px',
+                                borderRadius: 8,
+                                fontSize: 11,
+                                fontWeight: 600,
+                              }}
+                              title="Tempo de descanso (segundos)"
+                            >
+                              <Clock size={12} color="var(--hevy-blue)" />
+                              <input
+                                type="number"
+                                value={currentRest}
+                                onChange={(e) => {
+                                  const val = Math.max(
+                                    0,
+                                    Number(e.target.value) || DEFAULT_REST_SECONDS
+                                  );
+                                  setBuildingRoutine({
+                                    ...buildingRoutine,
+                                    exercises: buildingRoutine.exercises.map(
+                                      (item) =>
+                                        item.id === re.id
+                                          ? { ...item, restTimerSeconds: val }
+                                          : item
+                                    ),
+                                  });
+                                }}
+                                style={{
+                                  width: 42,
+                                  background: 'none',
+                                  border: 'none',
+                                  outline: 'none',
+                                  textAlign: 'center',
+                                  fontWeight: 700,
+                                  fontSize: 13,
+                                  color: 'var(--hevy-text)',
+                                }}
+                              />
+                              <span>s</span>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setBuildingRoutine({
+                                  ...buildingRoutine,
+                                  exercises: buildingRoutine.exercises.filter(
+                                    (item) => item.id !== re.id
+                                  ),
+                                })
+                              }
+                              title="Remover exercício da rotina"
+                              style={{
+                                background: 'var(--hevy-red-soft)',
+                                color: 'var(--hevy-red)',
+                                border: 'none',
+                                borderRadius: 8,
+                                width: 30,
+                                height: 30,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                              }}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Exercise Notes inside Routine */}
+                        <input
+                          type="text"
+                          value={re.notes || ''}
+                          onChange={(e) =>
+                            setBuildingRoutine({
+                              ...buildingRoutine,
+                              exercises: buildingRoutine.exercises.map((item) =>
+                                item.id === re.id
+                                  ? { ...item, notes: e.target.value }
+                                  : item
+                              ),
+                            })
+                          }
+                          placeholder="Notas do exercício na rotina..."
+                          style={{
+                            background: 'var(--hevy-elevated)',
+                            border: 'none',
+                            borderRadius: 7,
+                            padding: '6px 10px',
+                            fontSize: 12,
+                            color: 'var(--hevy-text-secondary)',
+                            outline: 'none',
+                          }}
+                        />
+
+                        {/* Sets Editor Header */}
+                        <div
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: '36px 1fr 1fr 34px',
+                            gap: 6,
+                            fontSize: 10,
+                            fontWeight: 700,
+                            color: 'var(--hevy-text-muted)',
+                            padding: '2px 4px',
+                          }}
+                        >
+                          <span>TIPO</span>
+                          <span style={{ textAlign: 'center' }}>CARGA (KG)</span>
+                          <span style={{ textAlign: 'center' }}>REPS</span>
+                          <span style={{ textAlign: 'center' }}>DEL</span>
+                        </div>
+
+                        {/* Sets Rows inside Routine Editor */}
+                        {re.sets.map((sItem: WorkoutSet, sIdx: number) => {
+                          const tCfg = SET_TYPE_CONFIG[sItem.type];
+                          return (
+                            <div
+                              key={sItem.id}
+                              style={{
+                                display: 'grid',
+                                gridTemplateColumns: '36px 1fr 1fr 34px',
+                                gap: 6,
+                                alignItems: 'center',
+                              }}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const nextType =
+                                    SET_TYPE_ORDER[
+                                      (SET_TYPE_ORDER.indexOf(sItem.type) + 1) %
+                                        SET_TYPE_ORDER.length
+                                    ];
+                                  setBuildingRoutine({
+                                    ...buildingRoutine,
+                                    exercises: buildingRoutine.exercises.map(
+                                      (item) =>
+                                        item.id === re.id
+                                          ? {
+                                              ...item,
+                                              sets: item.sets.map((st) =>
+                                                st.id === sItem.id
+                                                  ? { ...st, type: nextType }
+                                                  : st
+                                              ),
+                                            }
+                                          : item
+                                    ),
+                                  });
+                                }}
+                                style={{
+                                  height: 32,
+                                  borderRadius: 7,
+                                  border: 'none',
+                                  backgroundColor: tCfg.bg,
+                                  color: tCfg.color,
+                                  fontWeight: 700,
+                                  fontSize: 12,
+                                }}
+                              >
+                                {sItem.type === 'normal'
+                                  ? sIdx + 1
+                                  : tCfg.badge}
+                              </button>
+
+                              <input
+                                type="number"
+                                value={sItem.weightKg ?? ''}
+                                onChange={(e) => {
+                                  const val =
+                                    e.target.value === ''
+                                      ? null
+                                      : Number(e.target.value);
+                                  setBuildingRoutine({
+                                    ...buildingRoutine,
+                                    exercises: buildingRoutine.exercises.map(
+                                      (item) =>
+                                        item.id === re.id
+                                          ? {
+                                              ...item,
+                                              sets: item.sets.map((st) =>
+                                                st.id === sItem.id
+                                                  ? { ...st, weightKg: val }
+                                                  : st
+                                              ),
+                                            }
+                                          : item
+                                    ),
+                                  });
+                                }}
+                                className="hevy-set-input"
+                                style={{ height: 32 }}
+                              />
+
+                              <input
+                                type="number"
+                                value={sItem.reps ?? ''}
+                                onChange={(e) => {
+                                  const val =
+                                    e.target.value === ''
+                                      ? null
+                                      : Number(e.target.value);
+                                  setBuildingRoutine({
+                                    ...buildingRoutine,
+                                    exercises: buildingRoutine.exercises.map(
+                                      (item) =>
+                                        item.id === re.id
+                                          ? {
+                                              ...item,
+                                              sets: item.sets.map((st) =>
+                                                st.id === sItem.id
+                                                  ? { ...st, reps: val }
+                                                  : st
+                                              ),
+                                            }
+                                          : item
+                                    ),
+                                  });
+                                }}
+                                className="hevy-set-input"
+                                style={{ height: 32 }}
+                              />
+
+                              <button
+                                type="button"
+                                disabled={re.sets.length <= 1}
+                                onClick={() =>
+                                  setBuildingRoutine({
+                                    ...buildingRoutine,
+                                    exercises: buildingRoutine.exercises.map(
+                                      (item) =>
+                                        item.id === re.id
+                                          ? {
+                                              ...item,
+                                              sets: item.sets.filter(
+                                                (st) => st.id !== sItem.id
+                                              ),
+                                            }
+                                          : item
+                                    ),
+                                  })
+                                }
+                                style={{
+                                  height: 32,
+                                  borderRadius: 7,
+                                  border: 'none',
+                                  backgroundColor: 'var(--hevy-elevated)',
+                                  color:
+                                    re.sets.length <= 1
+                                      ? 'var(--hevy-border)'
+                                      : 'var(--hevy-red)',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                }}
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          );
+                        })}
+
+                        <button
+                          type="button"
+                          className="hevy-btn-secondary"
+                          style={{ padding: '6px', fontSize: 12, marginTop: 2 }}
+                          onClick={() => {
+                            const lastSet = re.sets[re.sets.length - 1];
+                            const newSet: WorkoutSet = {
+                              id: `rs-${Date.now()}-${re.sets.length + 1}`,
+                              type: 'normal',
+                              weightKg: lastSet ? lastSet.weightKg : 40,
+                              reps: lastSet ? lastSet.reps : 10,
+                              rpe: 8,
+                              completed: false,
+                            };
+                            setBuildingRoutine({
+                              ...buildingRoutine,
+                              exercises: buildingRoutine.exercises.map((item) =>
+                                item.id === re.id
+                                  ? { ...item, sets: [...item.sets, newSet] }
+                                  : item
+                              ),
+                            });
+                          }}
+                        >
+                          <Plus size={13} /> Adicionar Série
+                        </button>
+                      </div>
+                    );
+                  }
+                )}
 
                 <button
                   type="button"
                   className="hevy-btn-secondary"
+                  style={{ padding: '11px' }}
                   onClick={() => setPickerTarget('routine')}
                 >
                   <Plus size={16} /> Adicionar Exercício à Rotina
                 </button>
               </div>
+
               <button
                 type="button"
                 className="hevy-btn-primary"
-                onClick={() => {
-                  if (buildingRoutine.exercises.length === 0) {
-                    alert('Adicione pelo menos 1 exercício à rotina!');
-                    return;
-                  }
-                  setRoutines([buildingRoutine, ...routines]);
-                  setBuildingRoutine(null);
-                }}
+                style={{ width: '100%', padding: '13px', fontSize: 15 }}
+                onClick={handleSaveBuildingRoutine}
               >
-                Salvar Rotina
+                <Check size={17} />
+                {isEditingExistingRoutine
+                  ? 'Salvar Alterações'
+                  : 'Salvar Rotina'}
               </button>
             </div>
           </div>
         )}
 
         {/* ==================== MODALS ==================== */}
+        {showAuthModal && (
+          <AuthModal
+            session={authSession}
+            syncStatus={syncStatus}
+            onClose={() => setShowAuthModal(false)}
+            onLogin={handleLogin}
+            onRegister={handleRegister}
+            onLogout={handleLogout}
+            onForceSync={pullFromCloud}
+          />
+        )}
+
         {inspectExercise && (
           <ExerciseDetailModal
             exercise={inspectExercise}
@@ -3574,7 +4597,7 @@ export const App: React.FC = () => {
                       id: `re-${Date.now()}`,
                       exerciseId: ex.id,
                       notes: '',
-                      restTimerSeconds: 90,
+                      restTimerSeconds: DEFAULT_REST_SECONDS, // Default 60s (01:00)
                       supersetGroup: null,
                       sets: [
                         {
