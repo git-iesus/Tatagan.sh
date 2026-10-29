@@ -62,8 +62,16 @@ function translateAuthError(message: string): string {
     return 'Este e-mail já está cadastrado. Use a aba "Login".';
   if (m.includes('password should be at least'))
     return 'A senha é muito curta (mínimo de 6 caracteres).';
-  if (m.includes('rate limit') || m.includes('too many'))
-    return 'Muitas tentativas em pouco tempo. Aguarde alguns minutos e tente novamente.';
+  if (
+    m.includes('rate limit') ||
+    m.includes('too many') ||
+    m.includes('over_email_send_rate_limit')
+  ) {
+    if (m.includes('email') || m.includes('send')) {
+      return 'Limite de e-mails do Supabase atingido (máx. 2 por hora no plano grátis). Desative "Confirm email" no painel do Supabase (Authentication > Providers > Email) para cadastros instantâneos e ilimitados.';
+    }
+    return 'Muitas tentativas em pouco tempo. Aguarde alguns minutos ou desative a confirmação de e-mail no painel do Supabase.';
+  }
   if (m.includes('failed to fetch') || m.includes('network'))
     return 'Sem conexão com o servidor. Verifique sua internet.';
   if (m.includes('signups not allowed'))
