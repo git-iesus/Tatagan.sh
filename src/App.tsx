@@ -72,7 +72,7 @@ import {
   TIMER_SOUND_OPTIONS,
 } from './utils/sound';
 import { useDragReorder, moveItem } from './hooks/useDragReorder';
-import { useSupabaseSync } from './hooks/useSupabaseSync';
+import { useSupabaseSync, type SyncState } from './hooks/useSupabaseSync';
 import { TataganLogo } from './components/TataganLogo';
 import { MuscleHeatmap } from './components/MuscleHeatmap';
 import { PlateCalculatorModal } from './components/PlateCalculatorModal';
@@ -355,6 +355,31 @@ export const App: React.FC = () => {
   }, [activeWorkout]);
 
   // ==================== SUPABASE REALTIME CLOUD SYNC ====================
+  const syncState = useMemo<SyncState>(
+    () => ({
+      routines,
+      workouts,
+      customExercises,
+      measurements,
+      settings: {
+        userProfile,
+        weekStartsOn,
+        timerSound,
+        theme,
+      },
+    }),
+    [
+      routines,
+      workouts,
+      customExercises,
+      measurements,
+      userProfile,
+      weekStartsOn,
+      timerSound,
+      theme,
+    ]
+  );
+
   const {
     configured: isCloudConfigured,
     user: authUser,
@@ -366,18 +391,7 @@ export const App: React.FC = () => {
     requestPasswordReset: handleSupabaseResetPassword,
     syncNow: handleForceSync,
   } = useSupabaseSync({
-    state: {
-      routines,
-      workouts,
-      customExercises,
-      measurements,
-      settings: {
-        userProfile,
-        weekStartsOn,
-        timerSound,
-        theme,
-      },
-    },
+    state: syncState,
     seedState: {
       routines: INITIAL_ROUTINES,
       workouts: INITIAL_WORKOUT_HISTORY,
