@@ -37,6 +37,9 @@ import {
   MoreVertical,
   ShieldCheck,
   X,
+  RefreshCw,
+  WifiOff,
+  Loader2,
 } from 'lucide-react';
 import exercisesRaw from './data/exercises.json';
 import {
@@ -80,6 +83,7 @@ import { ExerciseDetailModal } from './components/ExerciseDetailModal';
 import { ExercisePickerModal } from './components/ExercisePickerModal';
 import { WorkoutSummaryModal } from './components/WorkoutSummaryModal';
 import { AuthModal } from './components/AuthModal';
+import { AuthScreen } from './components/AuthScreen';
 
 type NavTab = 'feed' | 'workout' | 'week' | 'exercises' | 'profile';
 
@@ -383,6 +387,7 @@ export const App: React.FC = () => {
   const {
     configured: isCloudConfigured,
     user: authUser,
+    authReady,
     status: syncStatus,
     lastSyncedAt,
     signIn: handleSupabaseLogin,
@@ -796,11 +801,13 @@ export const App: React.FC = () => {
     setRestTotal(DEFAULT_REST_SECONDS);
     setCompletedSummary(finalized);
     setActiveTab('feed');
+    window.setTimeout(() => void handleForceSync(), 60);
   };
 
   // Delete a workout post from history
   const handleDeleteWorkoutPost = (workoutId: string) => {
     setWorkouts((prev) => prev.filter((w) => w.id !== workoutId));
+    window.setTimeout(() => void handleForceSync(), 60);
   };
 
   // Open Routine Modal in Edit Mode (deep clone so cancel doesn't mutate)
@@ -850,6 +857,7 @@ export const App: React.FC = () => {
 
     setBuildingRoutine(null);
     setIsEditingExistingRoutine(false);
+    window.setTimeout(() => void handleForceSync(), 60);
   };
 
   // ==================== CSV TEMPLATE DOWNLOAD (BUTTON A) & IMPORT (BUTTON B) ====================
@@ -1241,6 +1249,63 @@ export const App: React.FC = () => {
     };
   }, [workouts, weekStartsOn, exerciseMap]);
 
+  // ==================== AUTH GATE & MANDATORY LOGIN ====================
+  // Enquanto o Supabase inicializa a sessão salva no dispositivo
+  if (!authReady) {
+    return (
+      <div
+        className="hevy-viewport-wrapper"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: '#000000',
+          minHeight: '100vh',
+          color: '#FFFFFF',
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 16,
+          }}
+        >
+          <TataganLogo theme="dark" size={38} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Loader2
+              size={18}
+              color="var(--hevy-blue)"
+              style={{ animation: 'spin 1s linear infinite' }}
+            />
+            <span
+              style={{
+                fontSize: 14,
+                color: 'var(--hevy-text-secondary)',
+                fontWeight: 500,
+              }}
+            >
+              Carregando Tatagan.sh...
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // OBRIGATÓRIO: O usuário não entra nem visualiza o app sem estar logado
+  if (!authUser) {
+    return (
+      <AuthScreen
+        onLogin={handleSupabaseLogin}
+        onRegister={handleSupabaseRegister}
+        onRequestPasswordReset={handleSupabaseResetPassword}
+        theme={theme}
+      />
+    );
+  }
+
   return (
     <div className="hevy-viewport-wrapper">
       <div className="hevy-mobile-shell">
@@ -1249,6 +1314,48 @@ export const App: React.FC = () => {
           <TataganLogo theme={theme} size={25} />
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            {/* Cloud Sync Status Indicator */}
+            <button
+              type="button"
+              onClick={() => setShowAuthModal(true)}
+              title={
+                syncStatus === 'syncing'
+                  ? 'Sincronizando com a nuvem...'
+                  : syncStatus === 'offline'
+                  ? 'Modo Offline: alterações salvas no aparelho'
+                  : 'Sincronizado na nuvem (Supabase)'
+              }
+              style={{
+                border: '1px solid var(--hevy-border)',
+                background: 'var(--hevy-elevated)',
+                color:
+                  syncStatus === 'syncing'
+                    ? 'var(--hevy-blue)'
+                    : syncStatus === 'offline'
+                    ? 'var(--hevy-orange)'
+                    : 'var(--hevy-green)',
+                borderRadius: 8,
+                height: 34,
+                padding: '0 8px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 5,
+                fontSize: 11,
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              {syncStatus === 'syncing' ? (
+                <RefreshCw
+                  size={14}
+                  style={{ animation: 'spin 1s linear infinite' }}
+                />
+              ) : syncStatus === 'offline' ? (
+                <WifiOff size={14} />
+              ) : (
+                <Cloud size={14} />
+              )}
+            </button>
             {/* Sound Selector */}
             <button
               type="button"
@@ -2101,11 +2208,14 @@ export const App: React.FC = () => {
 
                           <button
                             type="button"
-                            onClick={() =>
-                              setRoutines((prev) =>
-                                prev.filter((r) => r.id !== routine.id)
-                              )
-                            }
+                            onClick={() => {
+                              if (confirm(`Deseja excluir a rotina "${routine.title}"?`)) {
+                                setRoutines((prev) =>
+                                  prev.filter((r) => r.id !== routine.id)
+                                );
+                                window.setTimeout(() => void handleForceSync(), 60);
+                              }
+                            }}
                             style={{
                               background: 'var(--hevy-elevated)',
                               border: '1px solid var(--hevy-border)',
@@ -2926,10 +3036,18 @@ export const App: React.FC = () => {
                         fontSize: 12,
                         color: 'var(--hevy-red)',
                       }}
-                      onClick={handleSupabaseLogout}
+                      onClick={() => {
+                        if (
+                          confirm(
+                            'Deseja realmente sair da sua conta Tatagan.sh neste aparelho?'
+                          )
+                        ) {
+                          handleSupabaseLogout();
+                        }
+                      }}
                       title="Sair da conta (Logout)"
                     >
-                      <LogOut size={15} />
+                      <LogOut size={15} /> Sair
                     </button>
                   </div>
                 ) : (

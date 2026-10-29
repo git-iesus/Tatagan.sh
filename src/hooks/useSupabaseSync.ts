@@ -113,6 +113,7 @@ export function useSupabaseSync({
   const userRef = useRef<User | null>(null);
   const isPushingRef = useRef(false);
   const isPullingRef = useRef(false);
+  const hasPendingPushRef = useRef(false);
   const lastPushedFpRef = useRef('');
   const lastPulledFpRef = useRef('');
   const localPushTimestampRef = useRef(0);
@@ -124,7 +125,11 @@ export function useSupabaseSync({
   const push = useCallback(async (): Promise<void> => {
     const currentUser = userRef.current;
     if (!supabase || !currentUser) return;
-    if (isPushingRef.current || isPullingRef.current) return;
+    if (isPushingRef.current) {
+      hasPendingPushRef.current = true;
+      return;
+    }
+    if (isPullingRef.current) return;
 
     const currentState = stateRef.current;
     const currentFp = getFingerprint(currentState);
@@ -200,6 +205,10 @@ export function useSupabaseSync({
       setStatus(navigator.onLine === false ? 'offline' : 'error');
     } finally {
       isPushingRef.current = false;
+      if (hasPendingPushRef.current) {
+        hasPendingPushRef.current = false;
+        window.setTimeout(() => void push(), 50);
+      }
     }
   }, []);
 
@@ -281,6 +290,7 @@ export function useSupabaseSync({
           // Aplica os dados remotos apenas se forem diferentes do estado local atual
           if (remoteFp && remoteFp !== currentLocalFp) {
             lastPulledFpRef.current = remoteFp;
+            lastPushedFpRef.current = remoteFp;
             applyRef.current(remoteState);
           }
         }
@@ -390,21 +400,21 @@ export function useSupabaseSync({
     };
   }, [startSession, stopSession]);
 
-  // ---------- AUTO-PUSH ON STATE CHANGE (Debounce de 1.5s suave) ----------
+  // ---------- AUTO-PUSH ON STATE CHANGE (Debounce rápido de 700ms) ----------
   useEffect(() => {
     if (!user) return;
 
     if (pushTimerRef.current) clearTimeout(pushTimerRef.current);
     pushTimerRef.current = window.setTimeout(() => {
       void push();
-    }, 1500);
+    }, 700);
 
     return () => {
       if (pushTimerRef.current) clearTimeout(pushTimerRef.current);
     };
   }, [state, user, push]);
 
-  // ---------- LISTENERS DE REDE & FOCO ----------
+  // ---------- LISTENERS DE REDE, FOCO & UNLOAD ----------
   useEffect(() => {
     if (!user) return;
 
@@ -413,6 +423,19 @@ export function useSupabaseSync({
         if (Date.now() - (lastSyncedAt || 0) > 30000) {
           void pull();
         }
+      } else if (document.visibilityState === 'hidden') {
+        // Ao minimizar ou trocar de aba no smartphone/PC, envia pendências
+        const currentFp = getFingerprint(stateRef.current);
+        if (currentFp && currentFp !== lastPushedFpRef.current) {
+          void push();
+        }
+      }
+    };
+
+    const handleBeforeUnload = () => {
+      const currentFp = getFingerprint(stateRef.current);
+      if (currentFp && currentFp !== lastPushedFpRef.current) {
+        void push();
       }
     };
 
@@ -425,12 +448,14 @@ export function useSupabaseSync({
 
     window.addEventListener('focus', handleFocusOrVisible);
     document.addEventListener('visibilitychange', handleFocusOrVisible);
+    window.addEventListener('beforeunload', handleBeforeUnload);
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
     return () => {
       window.removeEventListener('focus', handleFocusOrVisible);
       document.removeEventListener('visibilitychange', handleFocusOrVisible);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
