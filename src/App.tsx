@@ -279,6 +279,28 @@ export const App: React.FC = () => {
     routineScrollContainerRef
   );
 
+  // Main Workout Tab - Routine Cards Drag & Drop Reordering Hook
+  const mainScrollContainerRef = useRef<HTMLElement | null>(null);
+  const routineListIds = useMemo(
+    () => routines.map((r) => r.id),
+    [routines]
+  );
+  const handleMoveRoutineCard = useCallback(
+    (fromIndex: number, toIndex: number) => {
+      setRoutines((prev) => moveItem(prev, fromIndex, toIndex));
+    },
+    []
+  );
+  const {
+    draggingId: routineCardDraggingId,
+    registerItem: registerRoutineCard,
+    getHandleProps: getRoutineCardHandleProps,
+  } = useDragReorder(
+    routineListIds,
+    handleMoveRoutineCard,
+    mainScrollContainerRef
+  );
+
   // CSV File Input Ref
   const csvInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -1432,7 +1454,7 @@ export const App: React.FC = () => {
         </header>
 
         {/* MAIN SCROLLABLE VIEWPORT */}
-        <main className="hevy-scroll-area">
+        <main ref={mainScrollContainerRef} className="hevy-scroll-area">
           {/* ==================== TAB 1: INÍCIO (HISTÓRICO DE POSTS DO USUÁRIO) ==================== */}
           {activeTab === 'feed' && (
             <div
@@ -2165,17 +2187,36 @@ export const App: React.FC = () => {
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                {routines.map((routine: Routine) => {
+                {routines.map((routine: Routine, routineIdx: number) => {
                   const routineMuscleMap = computeMuscleDistributionFromExercises(
                     routine.exercises,
                     exerciseMap
                   );
+                  const isDragging = routineCardDraggingId === routine.id;
 
                   return (
                     <div
                       key={routine.id}
+                      ref={registerRoutineCard(routine.id)}
                       className="hevy-card"
-                      style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 10,
+                        transition: isDragging
+                          ? 'none'
+                          : 'transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease',
+                        transform: isDragging ? 'scale(1.02)' : 'none',
+                        boxShadow: isDragging
+                          ? '0 12px 28px rgba(0,0,0,0.65), 0 0 0 2px var(--hevy-blue)'
+                          : undefined,
+                        borderColor: isDragging
+                          ? 'var(--hevy-blue)'
+                          : undefined,
+                        opacity: isDragging ? 0.95 : 1,
+                        zIndex: isDragging ? 20 : 1,
+                        position: 'relative',
+                      }}
                     >
                       <div
                         style={{
@@ -2185,7 +2226,7 @@ export const App: React.FC = () => {
                           gap: 8,
                         }}
                       >
-                        <div style={{ minWidth: 0 }}>
+                        <div style={{ minWidth: 0, flex: 1 }}>
                           <span
                             style={{
                               fontSize: 10,
@@ -2203,7 +2244,7 @@ export const App: React.FC = () => {
                           </h3>
                         </div>
 
-                        {/* Action Icons: Pencil (Edit) immediately to the left of Trash (Delete) */}
+                        {/* Action Icons: Move up/down, Drag Handle, Edit (Pencil), Delete (Trash) */}
                         <div
                           style={{
                             display: 'flex',
@@ -2212,6 +2253,104 @@ export const App: React.FC = () => {
                             flexShrink: 0,
                           }}
                         >
+                          {/* Botões de subir/descer para reordenação com 1 clique */}
+                          {routines.length > 1 && (
+                            <div
+                              style={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 2,
+                              }}
+                            >
+                              <button
+                                type="button"
+                                disabled={routineIdx === 0}
+                                onClick={() =>
+                                  handleMoveRoutineCard(routineIdx, routineIdx - 1)
+                                }
+                                title="Mover rotina para cima"
+                                aria-label="Mover rotina para cima"
+                                style={{
+                                  background: 'var(--hevy-elevated)',
+                                  border: '1px solid var(--hevy-border)',
+                                  borderRadius: 4,
+                                  width: 22,
+                                  height: 15,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  color:
+                                    routineIdx === 0
+                                      ? 'var(--hevy-border)'
+                                      : 'var(--hevy-text-secondary)',
+                                  cursor: routineIdx === 0 ? 'default' : 'pointer',
+                                  padding: 0,
+                                }}
+                              >
+                                <ChevronUp size={12} />
+                              </button>
+                              <button
+                                type="button"
+                                disabled={routineIdx === routines.length - 1}
+                                onClick={() =>
+                                  handleMoveRoutineCard(routineIdx, routineIdx + 1)
+                                }
+                                title="Mover rotina para baixo"
+                                aria-label="Mover rotina para baixo"
+                                style={{
+                                  background: 'var(--hevy-elevated)',
+                                  border: '1px solid var(--hevy-border)',
+                                  borderRadius: 4,
+                                  width: 22,
+                                  height: 15,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  color:
+                                    routineIdx === routines.length - 1
+                                      ? 'var(--hevy-border)'
+                                      : 'var(--hevy-text-secondary)',
+                                  cursor:
+                                    routineIdx === routines.length - 1
+                                      ? 'default'
+                                      : 'pointer',
+                                  padding: 0,
+                                }}
+                              >
+                                <ChevronDown size={12} />
+                              </button>
+                            </div>
+                          )}
+
+                          {/* Handle de Arrastar (GripVertical) */}
+                          {routines.length > 1 && (
+                            <div
+                              {...getRoutineCardHandleProps(routine.id)}
+                              title="Segure e arraste para mudar a ordem das rotinas"
+                              aria-label="Arrastar rotina para reordenar"
+                              style={{
+                                ...getRoutineCardHandleProps(routine.id).style,
+                                background: isDragging
+                                  ? 'var(--hevy-blue)'
+                                  : 'var(--hevy-elevated)',
+                                border: '1px solid var(--hevy-border)',
+                                borderRadius: 8,
+                                color: isDragging
+                                  ? '#ffffff'
+                                  : 'var(--hevy-text-secondary)',
+                                width: 32,
+                                height: 32,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                cursor: isDragging ? 'grabbing' : 'grab',
+                                touchAction: 'none',
+                              }}
+                            >
+                              <GripVertical size={16} />
+                            </div>
+                          )}
+
                           <button
                             type="button"
                             onClick={() => handleOpenEditRoutine(routine)}
