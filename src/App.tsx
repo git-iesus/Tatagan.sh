@@ -4034,32 +4034,93 @@ export const App: React.FC = () => {
                               flex: 1,
                             }}
                           >
-                            {/* Drag Reorder Handle */}
-                            <button
-                              type="button"
-                              {...getRoutineHandleProps(re.id)}
-                              title="Segure e arraste para reordenar"
-                              aria-label="Reordenar exercício"
-                              style={{
-                                background: 'none',
-                                border: 'none',
-                                padding: '6px 4px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                color: isDragging
-                                  ? 'var(--hevy-blue)'
-                                  : 'var(--hevy-text-muted)',
-                                cursor: isDragging ? 'grabbing' : 'grab',
-                                touchAction: 'none',
-                                userSelect: 'none',
-                                WebkitUserSelect: 'none',
-                                borderRadius: 4,
-                                flexShrink: 0,
-                              }}
-                            >
-                              <GripVertical size={18} />
-                            </button>
+                            {/* Drag Reorder Handle & Quick Up/Down */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+                              <button
+                                type="button"
+                                {...getRoutineHandleProps(re.id)}
+                                title="Segure e arraste para reordenar para cima ou para baixo"
+                                aria-label="Segure e arraste para reordenar"
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  padding: '6px 3px',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  color: isDragging
+                                    ? 'var(--hevy-blue)'
+                                    : 'var(--hevy-text-muted)',
+                                  cursor: isDragging ? 'grabbing' : 'grab',
+                                  touchAction: 'none',
+                                  userSelect: 'none',
+                                  WebkitUserSelect: 'none',
+                                  borderRadius: 4,
+                                }}
+                              >
+                                <GripVertical size={18} />
+                              </button>
+
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                <button
+                                  type="button"
+                                  disabled={exIdx === 0}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleMoveRoutineExercise(exIdx, exIdx - 1);
+                                  }}
+                                  title="Subir posição"
+                                  aria-label="Subir posição"
+                                  style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    padding: 0,
+                                    width: 14,
+                                    height: 11,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    color:
+                                      exIdx === 0
+                                        ? 'var(--hevy-border)'
+                                        : 'var(--hevy-text-muted)',
+                                    cursor: exIdx === 0 ? 'default' : 'pointer',
+                                  }}
+                                >
+                                  <ChevronUp size={13} />
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={exIdx === buildingRoutine.exercises.length - 1}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleMoveRoutineExercise(exIdx, exIdx + 1);
+                                  }}
+                                  title="Descer posição"
+                                  aria-label="Descer posição"
+                                  style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    padding: 0,
+                                    width: 14,
+                                    height: 11,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    color:
+                                      exIdx === buildingRoutine.exercises.length - 1
+                                        ? 'var(--hevy-border)'
+                                        : 'var(--hevy-text-muted)',
+                                    cursor:
+                                      exIdx === buildingRoutine.exercises.length - 1
+                                        ? 'default'
+                                        : 'pointer',
+                                  }}
+                                >
+                                  <ChevronDown size={13} />
+                                </button>
+                              </div>
+                            </div>
 
                             <div style={{ minWidth: 0 }}>
                               <div
