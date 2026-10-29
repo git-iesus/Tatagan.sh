@@ -474,7 +474,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <>
                   <CheckCircle2 size={15} color="var(--hevy-green)" />
                   <span>
-                    Sincronização ativa. {routinesCount !== undefined ? `${routinesCount} rotinas neste aparelho.` : ''} Dados na nuvem.
+                    Todas as alterações salvas na nuvem. {lastSyncedAt ? `Último salvamento às ${new Date(lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}.` : ''}
                   </span>
                 </>
               )}

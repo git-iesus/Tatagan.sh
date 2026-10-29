@@ -125,10 +125,15 @@ export function useSupabaseSync({
   const hasPendingPushRef = useRef(false);
   const lastPushedFpRef = useRef('');
   const lastPulledFpRef = useRef('');
+  const firstDirtyAtRef = useRef(0);
   const localPushTimestampRef = useRef(0);
   const pushTimerRef = useRef<number | null>(null);
   const pullTimerRef = useRef<number | null>(null);
   const channelRef = useRef<RealtimeChannel | null>(null);
+
+  // Constantes de auto-salvamento no padrão Google Sheets
+  const SAVE_DEBOUNCE_MS = 1500; // 1.5s de pausa na edição
+  const MAX_WAIT_MS = 4000; // Máximo de 4s em digitação contínua
 
   // ---------- SESSION CLEANUP ----------
   const stopSession = useCallback(() => {
@@ -249,6 +254,7 @@ export function useSupabaseSync({
 
         console.log('[Tatagan Cloud] Dados salvos com sucesso na nuvem!');
         lastPushedFpRef.current = currentFp;
+        firstDirtyAtRef.current = 0;
         setLastError(null);
         setLastSyncedAt(Date.now());
         setStatus(navigator.onLine === false ? 'offline' : 'synced');
@@ -382,6 +388,19 @@ export function useSupabaseSync({
           const remoteFp = getFingerprint(remoteState);
           const currentLocalFp = getFingerprint(stateRef.current);
 
+          // Se o usuário estiver no meio de edições locais pendentes (modelo Google Sheets), não sobrescreve
+          const isLocallyDirty =
+            currentLocalFp &&
+            lastPushedFpRef.current &&
+            currentLocalFp !== lastPushedFpRef.current;
+
+          if (isLocallyDirty && !opts?.force) {
+            console.log(
+              '[Tatagan Cloud] Pull pausado: alterações locais pendentes de salvamento.'
+            );
+            return;
+          }
+
           // Aplica dados da nuvem se forem diferentes ou se for pull forçado
           if (opts?.force || (remoteFp && remoteFp !== currentLocalFp)) {
             console.log(
@@ -457,11 +476,19 @@ export function useSupabaseSync({
             console.log(
               '[Tatagan Cloud] Atualização recebida via Realtime de outro dispositivo!'
             );
-            // Aguarda janela de 15 segundos para aplicar atualizações sem interromper ações em andamento
-            if (pullTimerRef.current) clearTimeout(pullTimerRef.current);
-            pullTimerRef.current = window.setTimeout(() => {
-              void pull({ force: true });
-            }, 15000);
+            // Modelo Google Sheets: só busca da nuvem se o usuário não estiver com digitação local pendente
+            const currentFp = getFingerprint(stateRef.current);
+            const isLocallyDirty =
+              currentFp &&
+              lastPushedFpRef.current &&
+              currentFp !== lastPushedFpRef.current;
+
+            if (!isLocallyDirty) {
+              if (pullTimerRef.current) clearTimeout(pullTimerRef.current);
+              pullTimerRef.current = window.setTimeout(() => {
+                void pull();
+              }, 1200);
+            }
           }
         )
         .subscribe((subStatus) => {
@@ -519,36 +546,65 @@ export function useSupabaseSync({
     };
   }, [startSession, stopSession]);
 
-  // ---------- AUTO-PUSH ON STATE CHANGE (Delay de 15 segundos) ----------
+  // ---------- AUTO-SAVE MODELO GOOGLE SHEETS (Debounce 1.5s + Max Wait 4s) ----------
   useEffect(() => {
     if (!user) return;
 
-    if (pushTimerRef.current) clearTimeout(pushTimerRef.current);
-    pushTimerRef.current = window.setTimeout(() => {
-      void push();
-    }, 15000); // 15 segundos
+    const currentFp = getFingerprint(state);
+    if (!currentFp) return;
+
+    // Detecta se houve alteração nos dados locais
+    if (currentFp !== lastPushedFpRef.current) {
+      // 1) Feedback visual imediato igual ao Google Sheets ("Salvando...")
+      if (navigator.onLine !== false) {
+        setStatus('syncing');
+      }
+
+      if (!firstDirtyAtRef.current) {
+        firstDirtyAtRef.current = Date.now();
+      }
+
+      if (pushTimerRef.current) clearTimeout(pushTimerRef.current);
+
+      // 2) Se o usuário estiver editando sem pausa há mais de 4s, salva em lote
+      if (Date.now() - firstDirtyAtRef.current >= MAX_WAIT_MS) {
+        firstDirtyAtRef.current = 0;
+        void push();
+      } else {
+        // 3) Aguarda 1.5s de pausa na digitação/edição para salvar suavemente
+        pushTimerRef.current = window.setTimeout(() => {
+          firstDirtyAtRef.current = 0;
+          void push();
+        }, SAVE_DEBOUNCE_MS);
+      }
+    }
 
     return () => {
       if (pushTimerRef.current) clearTimeout(pushTimerRef.current);
     };
   }, [state, user, push]);
 
-  // ---------- LISTENERS DE REDE, FOCO & UNLOAD + SINCRONIZAÇÃO A CADA 15s ----------
+  // ---------- LISTENERS DE REDE, FOCO & UNLOAD + SINCRONIZAÇÃO EM SEGUNDO PLANO ----------
   useEffect(() => {
     if (!user) return;
 
     const handleFocusOrVisible = () => {
       if (document.visibilityState === 'visible') {
-        // Ao voltar à aba, só busca se já tiver passado pelo menos 15s do último sync
-        const elapsedSinceLastSync = Date.now() - (lastSyncedAt || 0);
-        if (elapsedSinceLastSync >= 15000) {
-          console.log(
-            '[Tatagan Cloud] Aba focada (>15s): verificando dados na nuvem...'
-          );
-          void pull();
+        const currentFp = getFingerprint(stateRef.current);
+        const isLocallyDirty =
+          currentFp && currentFp !== lastPushedFpRef.current;
+
+        // Se houver edições pendentes, salva; caso contrário, checa novidades da nuvem
+        if (isLocallyDirty) {
+          void push({ force: true });
+        } else {
+          const elapsedSinceLastSync = Date.now() - (lastSyncedAt || 0);
+          if (elapsedSinceLastSync >= 15000) {
+            void pull();
+          }
         }
       } else if (document.visibilityState === 'hidden') {
-        // Ao minimizar ou trocar de aba no smartphone/PC, salva pendências para não perder dados
+        // Ao minimizar ou trocar de aba no smartphone/PC, salva pendências imediatamente
         const currentFp = getFingerprint(stateRef.current);
         if (currentFp && currentFp !== lastPushedFpRef.current) {
           void push({ force: true });
@@ -570,18 +626,17 @@ export function useSupabaseSync({
 
     const handleOffline = () => setStatus('offline');
 
-    // Intervalo de sincronização suave a cada 15 segundos (15 em 15s)
+    // Intervalo suave em segundo plano a cada 15s (só busca se não estiver com edições locais)
     const syncInterval = window.setInterval(() => {
       if (document.visibilityState === 'visible') {
         const currentFp = getFingerprint(stateRef.current);
-        // Se houver alterações locais pendentes, envia; caso contrário, busca novidades da nuvem
         if (currentFp && currentFp !== lastPushedFpRef.current) {
           void push();
         } else {
           void pull();
         }
       }
-    }, 15000); // 15 segundos
+    }, 15000);
 
     window.addEventListener('focus', handleFocusOrVisible);
     document.addEventListener('visibilitychange', handleFocusOrVisible);

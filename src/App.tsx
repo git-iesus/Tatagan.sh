@@ -36,6 +36,7 @@ import {
   GripVertical,
   MoreVertical,
   ShieldCheck,
+  CheckCircle2,
   X,
   RefreshCw,
   WifiOff,
@@ -1315,52 +1316,69 @@ export const App: React.FC = () => {
           <TataganLogo theme={theme} size={25} />
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-            {/* Cloud Sync Status Indicator */}
+            {/* Google Sheets-Style Auto-Save Status Pill */}
             <button
               type="button"
               onClick={() => setShowAuthModal(true)}
               title={
                 syncStatus === 'syncing'
-                  ? 'Sincronizando com a nuvem...'
+                  ? 'Salvando alterações na nuvem...'
                   : syncStatus === 'offline'
-                  ? 'Modo Offline: alterações salvas no aparelho'
+                  ? 'Modo Off-line: todas as alterações salvas neste aparelho'
                   : syncStatus === 'error'
-                  ? `Erro na nuvem: ${lastError || 'Toque para detalhes'}`
-                  : `Sincronizado na nuvem (${routines.length} rotinas)`
+                  ? `Erro ao salvar: ${lastError || 'Toque para detalhes'}`
+                  : lastSyncedAt
+                  ? `Todas as alterações salvas na nuvem (${new Date(lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`
+                  : 'Todas as alterações salvas na nuvem'
               }
               style={{
                 border: '1px solid var(--hevy-border)',
                 background: 'var(--hevy-elevated)',
-                color:
-                  syncStatus === 'syncing'
-                    ? 'var(--hevy-blue)'
-                    : syncStatus === 'offline'
-                    ? 'var(--hevy-orange)'
-                    : syncStatus === 'error'
-                    ? 'var(--hevy-red)'
-                    : 'var(--hevy-green)',
-                borderRadius: 8,
-                height: 34,
-                padding: '0 8px',
-                display: 'flex',
+                borderRadius: 20,
+                height: 32,
+                padding: '0 10px',
+                display: 'inline-flex',
                 alignItems: 'center',
-                gap: 5,
+                gap: 6,
                 fontSize: 11,
-                fontWeight: 600,
+                fontWeight: 500,
                 cursor: 'pointer',
+                transition: 'all 0.2s ease',
+                userSelect: 'none',
               }}
             >
               {syncStatus === 'syncing' ? (
-                <RefreshCw
-                  size={14}
-                  style={{ animation: 'spin 1s linear infinite' }}
-                />
+                <>
+                  <RefreshCw
+                    size={12}
+                    color="var(--hevy-blue)"
+                    style={{ animation: 'spin 1s linear infinite' }}
+                  />
+                  <span style={{ color: 'var(--hevy-blue)', fontWeight: 600 }}>
+                    Salvando...
+                  </span>
+                </>
               ) : syncStatus === 'offline' ? (
-                <WifiOff size={14} />
+                <>
+                  <WifiOff size={12} color="var(--hevy-orange)" />
+                  <span style={{ color: 'var(--hevy-orange)', fontWeight: 500 }}>
+                    Off-line
+                  </span>
+                </>
               ) : syncStatus === 'error' ? (
-                <AlertCircle size={14} />
+                <>
+                  <AlertCircle size={12} color="var(--hevy-red)" />
+                  <span style={{ color: 'var(--hevy-red)', fontWeight: 500 }}>
+                    Erro ao salvar
+                  </span>
+                </>
               ) : (
-                <Cloud size={14} />
+                <>
+                  <CheckCircle2 size={12} color="var(--hevy-green)" />
+                  <span style={{ color: 'var(--hevy-text-secondary)', fontWeight: 500 }}>
+                    Salvo na nuvem
+                  </span>
+                </>
               )}
             </button>
             {/* Sound Selector */}
