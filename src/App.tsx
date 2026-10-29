@@ -805,13 +805,11 @@ export const App: React.FC = () => {
     setRestTotal(DEFAULT_REST_SECONDS);
     setCompletedSummary(finalized);
     setActiveTab('feed');
-    window.setTimeout(() => void handleForceSync(), 60);
   };
 
   // Delete a workout post from history
   const handleDeleteWorkoutPost = (workoutId: string) => {
     setWorkouts((prev) => prev.filter((w) => w.id !== workoutId));
-    window.setTimeout(() => void handleForceSync(), 60);
   };
 
   // Open Routine Modal in Edit Mode (deep clone so cancel doesn't mutate)
@@ -861,7 +859,6 @@ export const App: React.FC = () => {
 
     setBuildingRoutine(null);
     setIsEditingExistingRoutine(false);
-    window.setTimeout(() => void handleForceSync(), 60);
   };
 
   // ==================== CSV TEMPLATE DOWNLOAD (BUTTON A) & IMPORT (BUTTON B) ====================
@@ -2223,7 +2220,6 @@ export const App: React.FC = () => {
                                 setRoutines((prev) =>
                                   prev.filter((r) => r.id !== routine.id)
                                 );
-                                window.setTimeout(() => void handleForceSync(), 60);
                               }
                             }}
                             style={{

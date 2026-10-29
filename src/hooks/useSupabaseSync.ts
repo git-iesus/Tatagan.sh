@@ -457,10 +457,11 @@ export function useSupabaseSync({
             console.log(
               '[Tatagan Cloud] Atualização recebida via Realtime de outro dispositivo!'
             );
+            // Aguarda janela de 15 segundos para aplicar atualizações sem interromper ações em andamento
             if (pullTimerRef.current) clearTimeout(pullTimerRef.current);
             pullTimerRef.current = window.setTimeout(() => {
               void pull({ force: true });
-            }, 300);
+            }, 15000);
           }
         )
         .subscribe((subStatus) => {
@@ -518,32 +519,36 @@ export function useSupabaseSync({
     };
   }, [startSession, stopSession]);
 
-  // ---------- AUTO-PUSH ON STATE CHANGE (Debounce de 600ms) ----------
+  // ---------- AUTO-PUSH ON STATE CHANGE (Delay de 15 segundos) ----------
   useEffect(() => {
     if (!user) return;
 
     if (pushTimerRef.current) clearTimeout(pushTimerRef.current);
     pushTimerRef.current = window.setTimeout(() => {
       void push();
-    }, 600);
+    }, 15000); // 15 segundos
 
     return () => {
       if (pushTimerRef.current) clearTimeout(pushTimerRef.current);
     };
   }, [state, user, push]);
 
-  // ---------- LISTENERS DE REDE, FOCO & UNLOAD + POLLING DE SEGURANÇA ----------
+  // ---------- LISTENERS DE REDE, FOCO & UNLOAD + SINCRONIZAÇÃO A CADA 15s ----------
   useEffect(() => {
     if (!user) return;
 
     const handleFocusOrVisible = () => {
       if (document.visibilityState === 'visible') {
-        console.log(
-          '[Tatagan Cloud] Aba focada / tela desbloqueada: sincronizando dados...'
-        );
-        void pull({ force: true });
+        // Ao voltar à aba, só busca se já tiver passado pelo menos 15s do último sync
+        const elapsedSinceLastSync = Date.now() - (lastSyncedAt || 0);
+        if (elapsedSinceLastSync >= 15000) {
+          console.log(
+            '[Tatagan Cloud] Aba focada (>15s): verificando dados na nuvem...'
+          );
+          void pull();
+        }
       } else if (document.visibilityState === 'hidden') {
-        // Ao minimizar ou trocar de aba no smartphone/PC, envia pendências
+        // Ao minimizar ou trocar de aba no smartphone/PC, salva pendências para não perder dados
         const currentFp = getFingerprint(stateRef.current);
         if (currentFp && currentFp !== lastPushedFpRef.current) {
           void push({ force: true });
@@ -565,12 +570,18 @@ export function useSupabaseSync({
 
     const handleOffline = () => setStatus('offline');
 
-    // Intervalo de segurança a cada 10s para pegar alterações mesmo se o WebSocket falhar no mobile
-    const pollInterval = window.setInterval(() => {
+    // Intervalo de sincronização suave a cada 15 segundos (15 em 15s)
+    const syncInterval = window.setInterval(() => {
       if (document.visibilityState === 'visible') {
-        void pull();
+        const currentFp = getFingerprint(stateRef.current);
+        // Se houver alterações locais pendentes, envia; caso contrário, busca novidades da nuvem
+        if (currentFp && currentFp !== lastPushedFpRef.current) {
+          void push();
+        } else {
+          void pull();
+        }
       }
-    }, 10000);
+    }, 15000); // 15 segundos
 
     window.addEventListener('focus', handleFocusOrVisible);
     document.addEventListener('visibilitychange', handleFocusOrVisible);
@@ -579,14 +590,14 @@ export function useSupabaseSync({
     window.addEventListener('offline', handleOffline);
 
     return () => {
-      clearInterval(pollInterval);
+      clearInterval(syncInterval);
       window.removeEventListener('focus', handleFocusOrVisible);
       document.removeEventListener('visibilitychange', handleFocusOrVisible);
       window.removeEventListener('beforeunload', handleBeforeUnload);
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [user, pull, push]);
+  }, [user, lastSyncedAt, pull, push]);
 
   // ==================== AUTH PUBLIC METHODS ====================
 
