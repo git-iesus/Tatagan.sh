@@ -122,16 +122,45 @@ export function useSupabaseSync({
   const pullTimerRef = useRef<number | null>(null);
   const channelRef = useRef<RealtimeChannel | null>(null);
 
+  // ---------- SESSION CLEANUP ----------
+  const stopSession = useCallback(() => {
+    if (supabase && channelRef.current) {
+      void supabase.removeChannel(channelRef.current);
+      channelRef.current = null;
+    }
+    userRef.current = null;
+    setUser(null);
+    lastPushedFpRef.current = '';
+    lastPulledFpRef.current = '';
+    setLastError(null);
+    setStatus(isSupabaseConfigured ? 'signed-out' : 'disabled');
+  }, []);
+
   // ---------- PUSH (Local -> Cloud) ----------
   const push = useCallback(
     async (opts?: { force?: boolean }): Promise<void> => {
-      const currentUser = userRef.current;
-      if (!supabase || !currentUser) return;
+      if (!supabase) return;
       if (isPushingRef.current) {
         hasPendingPushRef.current = true;
         return;
       }
       if (isPullingRef.current && !opts?.force) return;
+
+      // Valida sessão atual diretamente com o Supabase Auth no servidor
+      const { data: authData, error: authError } =
+        await supabase.auth.getUser();
+      const currentUser = authData?.user;
+
+      if (authError || !currentUser) {
+        console.warn(
+          '[Tatagan Cloud] Push ignorado: usuário não autenticado no servidor.'
+        );
+        stopSession();
+        return;
+      }
+
+      userRef.current = currentUser;
+      setUser(currentUser);
 
       const currentState = stateRef.current;
       const currentFp = getFingerprint(currentState);
@@ -217,7 +246,13 @@ export function useSupabaseSync({
         setStatus(navigator.onLine === false ? 'offline' : 'synced');
       } catch (err: any) {
         console.error('[Tatagan Cloud] Falha no push:', err);
-        setLastError(err?.message || 'Falha ao salvar na nuvem.');
+        const rawMsg = err?.message || '';
+        let displayMsg = rawMsg || 'Falha ao salvar na nuvem.';
+        if (rawMsg.includes('row-level security') || rawMsg.includes('42501')) {
+          displayMsg =
+            'Erro de RLS no Supabase. Execute o script supabase_reset_all.sql no SQL Editor.';
+        }
+        setLastError(displayMsg);
         setStatus(navigator.onLine === false ? 'offline' : 'error');
       } finally {
         isPushingRef.current = false;
@@ -227,15 +262,29 @@ export function useSupabaseSync({
         }
       }
     },
-    []
+    [stopSession]
   );
 
   // ---------- PULL (Cloud -> Local) ----------
   const pull = useCallback(
     async (opts?: { force?: boolean; isInitial?: boolean }): Promise<void> => {
-      const currentUser = userRef.current;
-      if (!supabase || !currentUser) return;
+      if (!supabase) return;
       if (isPullingRef.current && !opts?.force) return;
+
+      const { data: authData, error: authError } =
+        await supabase.auth.getUser();
+      const currentUser = authData?.user;
+
+      if (authError || !currentUser) {
+        console.warn(
+          '[Tatagan Cloud] Pull ignorado: usuário não autenticado no servidor.'
+        );
+        stopSession();
+        return;
+      }
+
+      userRef.current = currentUser;
+      setUser(currentUser);
 
       isPullingRef.current = true;
       setStatus('syncing');
@@ -413,33 +462,31 @@ export function useSupabaseSync({
     [pull]
   );
 
-  const stopSession = useCallback(() => {
-    if (supabase && channelRef.current) {
-      void supabase.removeChannel(channelRef.current);
-      channelRef.current = null;
-    }
-    userRef.current = null;
-    setUser(null);
-    lastPushedFpRef.current = '';
-    lastPulledFpRef.current = '';
-    setLastError(null);
-    setStatus(isSupabaseConfigured ? 'signed-out' : 'disabled');
-  }, []);
-
   // ---------- AUTH LISTENER ----------
   useEffect(() => {
-    if (!supabase) return;
+    const client = supabase;
+    if (!client) return;
     let isMounted = true;
 
-    supabase.auth.getSession().then(({ data }) => {
+    // Valida a sessão diretamente com o servidor Supabase Auth (evita sessões fantasmas/órfãs)
+    client.auth.getUser().then(async ({ data, error }) => {
       if (!isMounted) return;
-      if (data.session?.user) {
-        startSession(data.session.user);
+      if (error || !data.user) {
+        // Token inválido, expirado ou usuário excluído do banco
+        await client.auth.signOut();
+        try {
+          localStorage.removeItem('tatagan-auth');
+        } catch {
+          // ignore
+        }
+        stopSession();
+      } else {
+        startSession(data.user);
       }
       setAuthReady(true);
     });
 
-    const { data: authListener } = supabase.auth.onAuthStateChange(
+    const { data: authListener } = client.auth.onAuthStateChange(
       (event, session) => {
         if (!isMounted) return;
         if (event === 'PASSWORD_RECOVERY') {
@@ -449,7 +496,7 @@ export function useSupabaseSync({
         const sessionUser = session?.user ?? null;
         if (sessionUser && userRef.current?.id !== sessionUser.id) {
           startSession(sessionUser);
-        } else if (!sessionUser && userRef.current && event === 'SIGNED_OUT') {
+        } else if (!sessionUser && (event === 'SIGNED_OUT' || userRef.current)) {
           stopSession();
         }
       }
@@ -603,6 +650,11 @@ export function useSupabaseSync({
     stopSession();
     resetRef.current();
     await supabase.auth.signOut();
+    try {
+      localStorage.removeItem('tatagan-auth');
+    } catch {
+      // ignore
+    }
   };
 
   const requestPasswordReset = async (email: string): Promise<AuthResult> => {
