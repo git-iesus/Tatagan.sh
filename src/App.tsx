@@ -34,6 +34,9 @@ import {
   LogOut,
   RotateCcw,
   GripVertical,
+  MoreVertical,
+  ShieldCheck,
+  X,
 } from 'lucide-react';
 import exercisesRaw from './data/exercises.json';
 import {
@@ -212,9 +215,18 @@ export const App: React.FC = () => {
   const [workoutSheetExpanded, setWorkoutSheetExpanded] = useState(true);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
-  // Rest Timer State — Default is 60 seconds (01:00)
+  // Rest Timer & Passive Notification States (Melhoria 1)
   const [restRemaining, setRestRemaining] = useState<number>(0);
   const [restTotal, setRestTotal] = useState<number>(DEFAULT_REST_SECONDS);
+  const [restSuggestionToast, setRestSuggestionToast] = useState<{
+    exerciseTitle: string;
+    restText: string;
+    id: number;
+  } | null>(null);
+
+  // Active workout feedback toast & exercise menu (Melhoria 2)
+  const [workoutFeedbackToast, setWorkoutFeedbackToast] = useState<string | null>(null);
+  const [activeExerciseMenuId, setActiveExerciseMenuId] = useState<string | null>(null);
 
   // Modals State
   const [inspectExercise, setInspectExercise] = useState<Exercise | null>(null);
@@ -420,20 +432,16 @@ export const App: React.FC = () => {
     return () => clearInterval(interval);
   }, [activeWorkout]);
 
-  // Live Rest Countdown Timer
-  useEffect(() => {
-    if (restRemaining <= 0) return;
-    const timer = window.setInterval(() => {
-      setRestRemaining((prev) => {
-        if (prev <= 1) {
-          playHevySound(timerSound);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [restRemaining, timerSound]);
+  // Helper to format suggested rest time (e.g. "1 minuto", "1:30 min", "45s")
+  const formatSuggestedRest = (seconds: number): string => {
+    if (seconds <= 0) return 'Livre';
+    if (seconds < 60) return `${seconds}s`;
+    if (seconds === 60) return '1 minuto';
+    if (seconds % 60 === 0) return `${seconds / 60} minutos`;
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${String(secs).padStart(2, '0')} min`;
+  };
 
   // Helper to get user initials
   const getUserInitials = (name: string) => {
@@ -590,10 +598,46 @@ export const App: React.FC = () => {
         playHevySound('set_complete_high');
       }
 
+      // Notificação passiva de descanso planejado (sem cronômetro regressivo intrusivo)
       const targetRest = exInstance.restTimerSeconds || DEFAULT_REST_SECONDS;
-      setRestTotal(targetRest);
-      setRestRemaining(targetRest);
+      const meta = exerciseMap[exInstance.exerciseId];
+      const toastId = Date.now();
+      setRestSuggestionToast({
+        exerciseTitle: meta?.title || 'Exercício',
+        restText: formatSuggestedRest(targetRest),
+        id: toastId,
+      });
+
+      // Desaparece sozinho após 4.5 segundos sem exigir clique nem interromper navegação
+      setTimeout(() => {
+        setRestSuggestionToast((curr) => (curr?.id === toastId ? null : curr));
+      }, 4500);
     }
+  };
+
+  // Melhoria 2: Exclusão de Exercício Restrita à Sessão de Treino Ativa (Desvinculada do Template)
+  const handleRemoveExerciseFromActiveSession = (exInstance: WorkoutExercise) => {
+    if (!activeWorkout) return;
+    const meta = exerciseMap[exInstance.exerciseId];
+    const exName = meta?.title || 'Exercício';
+
+    // Remove exclusivamente da sessão em andamento (activeWorkout).
+    // A Rotina Padrão (Template) salva no banco de dados e no state routines NÃO sofre nenhuma alteração!
+    setActiveWorkout({
+      ...activeWorkout,
+      exercises: activeWorkout.exercises.filter((item) => item.id !== exInstance.id),
+    });
+
+    // Feedback visual imediato reforçando que a rotina padrão não foi alterada
+    setWorkoutFeedbackToast(
+      `"${exName}" removido desta sessão. Sua rotina padrão não foi alterada.`
+    );
+
+    setTimeout(() => {
+      setWorkoutFeedbackToast((curr) =>
+        curr?.includes(exName) ? null : curr
+      );
+    }, 4000);
   };
 
   const handleCycleSetType = (exerciseInstanceId: string, setItem: WorkoutSet) => {
@@ -3268,9 +3312,7 @@ export const App: React.FC = () => {
                     fontWeight: 600,
                   }}
                 >
-                  ⏱️ {formatTimerMMSS(elapsedSeconds)}
-                  {restRemaining > 0 &&
-                    ` • Descanso: ${formatTimerMMSS(restRemaining)}`}
+                  ⏱️ {formatTimerMMSS(elapsedSeconds)} • Treino em andamento
                 </div>
               </div>
             </div>
@@ -3360,115 +3402,71 @@ export const App: React.FC = () => {
               </button>
             </div>
 
-            {/* Persistent Rest Timer Bar (Default 01:00 / 60s) */}
-            <div
-              style={{
-                backgroundColor: 'var(--hevy-card)',
-                borderBottom:
-                  restRemaining > 0
-                    ? '1px solid var(--hevy-blue)'
-                    : '1px solid var(--hevy-border)',
-                padding: '8px 14px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 8,
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Clock
-                  size={16}
-                  color={
-                    restRemaining > 0
-                      ? 'var(--hevy-blue)'
-                      : 'var(--hevy-text-secondary)'
-                  }
-                />
-                <div>
-                  <div
-                    style={{
-                      fontSize: 10,
-                      color: 'var(--hevy-text-secondary)',
-                      fontWeight: 700,
-                    }}
-                  >
-                    CRONÔMETRO DE DESCANSO (PADRÃO 01:00)
-                  </div>
-                  <div
-                    style={{
-                      fontSize: 15,
-                      fontWeight: 700,
-                      color:
-                        restRemaining > 0
-                          ? 'var(--hevy-blue)'
-                          : 'var(--hevy-text)',
-                    }}
-                  >
-                    {restRemaining > 0
-                      ? formatTimerMMSS(restRemaining)
-                      : formatTimerMMSS(restTotal || DEFAULT_REST_SECONDS)}
-                  </div>
+            {/* Notificação Passiva de Descanso (Sem cronômetro regressivo intrusivo, sem bloquear tela) */}
+            {restSuggestionToast && (
+              <div
+                style={{
+                  margin: '8px 14px 0',
+                  padding: '9px 14px',
+                  borderRadius: 10,
+                  backgroundColor: 'rgba(0, 114, 245, 0.12)',
+                  border: '1px solid rgba(0, 114, 245, 0.35)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  color: 'var(--hevy-text)',
+                  fontSize: 13,
+                  fontWeight: 600,
+                }}
+              >
+                <Clock size={16} color="var(--hevy-blue)" style={{ flexShrink: 0 }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ color: 'var(--hevy-text-secondary)', fontSize: 11, fontWeight: 500 }}>
+                    {restSuggestionToast.exerciseTitle} •{' '}
+                  </span>
+                  <span>
+                    Descanso sugerido: <strong style={{ color: 'var(--hevy-blue)' }}>{restSuggestionToast.restText}</strong>
+                  </span>
                 </div>
               </div>
+            )}
 
-              <div style={{ display: 'flex', gap: 5 }}>
-                {restRemaining > 0 ? (
-                  <>
-                    <button
-                      type="button"
-                      className="hevy-btn-secondary"
-                      style={{ padding: '5px 8px', fontSize: 11 }}
-                      onClick={() => setRestRemaining((r) => Math.max(0, r - 15))}
-                    >
-                      -15s
-                    </button>
-                    <button
-                      type="button"
-                      className="hevy-btn-secondary"
-                      style={{ padding: '5px 8px', fontSize: 11 }}
-                      onClick={() => setRestRemaining((r) => r + 15)}
-                    >
-                      +15s
-                    </button>
-                    <button
-                      type="button"
-                      className="hevy-btn-secondary"
-                      style={{ padding: '5px 8px', fontSize: 11 }}
-                      title="Resetar timer para 01:00 (ou padrão do exercício)"
-                      onClick={() =>
-                        setRestRemaining(restTotal || DEFAULT_REST_SECONDS)
-                      }
-                    >
-                      <RotateCcw size={13} />
-                    </button>
-                    <button
-                      type="button"
-                      className="hevy-btn-primary"
-                      style={{ padding: '5px 10px', fontSize: 11 }}
-                      onClick={() => {
-                        setRestRemaining(0);
-                        setRestTotal(DEFAULT_REST_SECONDS);
-                      }}
-                    >
-                      Pular
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    type="button"
-                    className="hevy-btn-secondary"
-                    style={{ padding: '5px 10px', fontSize: 11 }}
-                    onClick={() => {
-                      const target = restTotal || DEFAULT_REST_SECONDS;
-                      setRestTotal(target);
-                      setRestRemaining(target);
-                    }}
-                  >
-                    <Play size={12} /> Iniciar {formatTimerMMSS(restTotal || DEFAULT_REST_SECONDS)}
-                  </button>
-                )}
+            {/* Feedback Visual: Exercício Removido da Sessão Ativa (Rotina Padrão Intacta) */}
+            {workoutFeedbackToast && (
+              <div
+                style={{
+                  margin: '8px 14px 0',
+                  padding: '9px 14px',
+                  borderRadius: 10,
+                  backgroundColor: 'rgba(42, 204, 88, 0.14)',
+                  border: '1px solid rgba(42, 204, 88, 0.4)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  color: 'var(--hevy-text)',
+                  fontSize: 12,
+                  fontWeight: 600,
+                }}
+              >
+                <ShieldCheck size={16} color="var(--hevy-green)" style={{ flexShrink: 0 }} />
+                <span style={{ flex: 1 }}>{workoutFeedbackToast}</span>
+                <button
+                  type="button"
+                  onClick={() => setWorkoutFeedbackToast(null)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--hevy-text-muted)',
+                    cursor: 'pointer',
+                    padding: 2,
+                    display: 'flex',
+                    alignItems: 'center',
+                  }}
+                >
+                  <X size={14} />
+                </button>
               </div>
-            </div>
+            )}
 
             <div
               style={{
@@ -3567,7 +3565,7 @@ export const App: React.FC = () => {
                       </div>
 
                       <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
-                        {/* Exercise Rest Timer Cycle Button (Defaults to 60s / 01:00) */}
+                        {/* Descanso Planejado do Exercício (Toque para alterar o tempo sugerido) */}
                         <button
                           type="button"
                           onClick={() => {
@@ -3584,9 +3582,8 @@ export const App: React.FC = () => {
                                   : item
                               ),
                             });
-                            setRestTotal(nextRest);
                           }}
-                          title="Tempo de descanso deste exercício (toque para alterar)"
+                          title="Descanso sugerido para este exercício (toque para alterar)"
                           style={{
                             background: 'var(--hevy-elevated)',
                             color: 'var(--hevy-text-secondary)',
@@ -3601,7 +3598,7 @@ export const App: React.FC = () => {
                           }}
                         >
                           <Clock size={12} color="var(--hevy-blue)" />
-                          {formatTimerMMSS(exRest)}
+                          {formatSuggestedRest(exRest)}
                         </button>
 
                         <button
@@ -3667,6 +3664,119 @@ export const App: React.FC = () => {
                         >
                           <Disc size={14} />
                         </button>
+
+                        {/* Menu de Opções ("...") para Remover/Pular Exercício apenas desta sessão */}
+                        <div style={{ position: 'relative' }}>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveExerciseMenuId((prev) =>
+                                prev === exInstance.id ? null : exInstance.id
+                              );
+                            }}
+                            title="Opções do exercício nesta sessão"
+                            aria-label="Opções do exercício"
+                            style={{
+                              background:
+                                activeExerciseMenuId === exInstance.id
+                                  ? 'var(--hevy-elevated)'
+                                  : 'transparent',
+                              color: 'var(--hevy-text-secondary)',
+                              border: 'none',
+                              borderRadius: 8,
+                              padding: '6px 6px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            <MoreVertical size={16} />
+                          </button>
+
+                          {activeExerciseMenuId === exInstance.id && (
+                            <>
+                              <div
+                                style={{
+                                  position: 'fixed',
+                                  inset: 0,
+                                  zIndex: 59,
+                                }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveExerciseMenuId(null);
+                                }}
+                              />
+                              <div
+                                onClick={(e) => e.stopPropagation()}
+                                style={{
+                                  position: 'absolute',
+                                  top: '100%',
+                                  right: 0,
+                                  marginTop: 6,
+                                  zIndex: 60,
+                                  backgroundColor: 'var(--hevy-surface-1)',
+                                  border: '1px solid var(--hevy-border)',
+                                  borderRadius: 12,
+                                  boxShadow: '0 10px 30px rgba(0, 0, 0, 0.45)',
+                                  minWidth: 230,
+                                  padding: 6,
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: 4,
+                                }}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    handleRemoveExerciseFromActiveSession(exInstance);
+                                    setActiveExerciseMenuId(null);
+                                  }}
+                                  style={{
+                                    display: 'flex',
+                                    alignItems: 'flex-start',
+                                    gap: 10,
+                                    padding: '10px 12px',
+                                    background: 'none',
+                                    border: 'none',
+                                    borderRadius: 8,
+                                    color: 'var(--hevy-red)',
+                                    fontSize: 13,
+                                    fontWeight: 600,
+                                    cursor: 'pointer',
+                                    textAlign: 'left',
+                                    width: '100%',
+                                  }}
+                                  onMouseEnter={(e) =>
+                                    (e.currentTarget.style.backgroundColor =
+                                      'var(--hevy-red-soft)')
+                                  }
+                                  onMouseLeave={(e) =>
+                                    (e.currentTarget.style.backgroundColor =
+                                      'transparent')
+                                  }
+                                >
+                                  <Trash2 size={16} style={{ marginTop: 2, flexShrink: 0 }} />
+                                  <div>
+                                    <div>Remover deste treino</div>
+                                    <div
+                                      style={{
+                                        fontSize: 11,
+                                        fontWeight: 400,
+                                        color: 'var(--hevy-text-muted)',
+                                        marginTop: 2,
+                                        lineHeight: 1.3,
+                                      }}
+                                    >
+                                      Apenas desta sessão. Sua rotina padrão fica intacta.
+                                    </div>
+                                  </div>
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
                       </div>
                     </div>
 
