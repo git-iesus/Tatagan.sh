@@ -40,6 +40,7 @@ import {
   RefreshCw,
   WifiOff,
   Loader2,
+  AlertCircle,
 } from 'lucide-react';
 import exercisesRaw from './data/exercises.json';
 import {
@@ -390,11 +391,14 @@ export const App: React.FC = () => {
     authReady,
     status: syncStatus,
     lastSyncedAt,
+    lastError,
     signIn: handleSupabaseLogin,
     signUp: handleSupabaseRegister,
     signOut: handleSupabaseLogout,
     requestPasswordReset: handleSupabaseResetPassword,
     syncNow: handleForceSync,
+    pushToCloud: handlePushToCloud,
+    pullFromCloud: handlePullFromCloud,
   } = useSupabaseSync({
     state: syncState,
     seedState: {
@@ -1323,7 +1327,9 @@ export const App: React.FC = () => {
                   ? 'Sincronizando com a nuvem...'
                   : syncStatus === 'offline'
                   ? 'Modo Offline: alterações salvas no aparelho'
-                  : 'Sincronizado na nuvem (Supabase)'
+                  : syncStatus === 'error'
+                  ? `Erro na nuvem: ${lastError || 'Toque para detalhes'}`
+                  : `Sincronizado na nuvem (${routines.length} rotinas)`
               }
               style={{
                 border: '1px solid var(--hevy-border)',
@@ -1333,6 +1339,8 @@ export const App: React.FC = () => {
                     ? 'var(--hevy-blue)'
                     : syncStatus === 'offline'
                     ? 'var(--hevy-orange)'
+                    : syncStatus === 'error'
+                    ? 'var(--hevy-red)'
                     : 'var(--hevy-green)',
                 borderRadius: 8,
                 height: 34,
@@ -1352,6 +1360,8 @@ export const App: React.FC = () => {
                 />
               ) : syncStatus === 'offline' ? (
                 <WifiOff size={14} />
+              ) : syncStatus === 'error' ? (
+                <AlertCircle size={14} />
               ) : (
                 <Cloud size={14} />
               )}
@@ -4737,12 +4747,16 @@ export const App: React.FC = () => {
             status={syncStatus}
             configured={isCloudConfigured}
             lastSyncedAt={lastSyncedAt}
+            lastError={lastError}
+            routinesCount={routines.length}
             onClose={() => setShowAuthModal(false)}
             onLogin={handleSupabaseLogin}
             onRegister={handleSupabaseRegister}
             onRequestPasswordReset={handleSupabaseResetPassword}
             onLogout={handleSupabaseLogout}
             onForceSync={handleForceSync}
+            onPushToCloud={handlePushToCloud}
+            onPullFromCloud={handlePullFromCloud}
           />
         )}
 

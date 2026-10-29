@@ -99,6 +99,7 @@ export function useSupabaseSync({
     isSupabaseConfigured ? 'signed-out' : 'disabled'
   );
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
+  const [lastError, setLastError] = useState<string | null>(null);
   const [recoveryMode, setRecoveryMode] = useState(false);
 
   const stateRef = useRef(state);
@@ -122,118 +123,151 @@ export function useSupabaseSync({
   const channelRef = useRef<RealtimeChannel | null>(null);
 
   // ---------- PUSH (Local -> Cloud) ----------
-  const push = useCallback(async (): Promise<void> => {
-    const currentUser = userRef.current;
-    if (!supabase || !currentUser) return;
-    if (isPushingRef.current) {
-      hasPendingPushRef.current = true;
-      return;
-    }
-    if (isPullingRef.current) return;
-
-    const currentState = stateRef.current;
-    const currentFp = getFingerprint(currentState);
-    if (!currentFp) return;
-
-    // Se o estado não mudou desde o último push ou pull, nada a fazer!
-    if (
-      currentFp === lastPushedFpRef.current ||
-      currentFp === lastPulledFpRef.current
-    ) {
-      return;
-    }
-
-    isPushingRef.current = true;
-    localPushTimestampRef.current = Date.now();
-    setStatus('syncing');
-
-    try {
-      const now = new Date().toISOString();
-      const rows = [
-        {
-          user_id: currentUser.id,
-          collection: 'settings',
-          item_id: 'main',
-          data: currentState.settings,
-          sort_key: 0,
-          updated_at: now,
-        },
-        {
-          user_id: currentUser.id,
-          collection: 'routine',
-          item_id: 'all',
-          data: currentState.routines,
-          sort_key: 0,
-          updated_at: now,
-        },
-        {
-          user_id: currentUser.id,
-          collection: 'workout',
-          item_id: 'all',
-          data: currentState.workouts,
-          sort_key: 0,
-          updated_at: now,
-        },
-        {
-          user_id: currentUser.id,
-          collection: 'custom_exercise',
-          item_id: 'all',
-          data: currentState.customExercises,
-          sort_key: 0,
-          updated_at: now,
-        },
-        {
-          user_id: currentUser.id,
-          collection: 'measurement',
-          item_id: 'all',
-          data: currentState.measurements,
-          sort_key: 0,
-          updated_at: now,
-        },
-      ];
-
-      const { error } = await supabase
-        .from(SYNC_TABLE)
-        .upsert(rows, { onConflict: 'user_id,collection,item_id' });
-
-      if (error) throw error;
-
-      lastPushedFpRef.current = currentFp;
-      setLastSyncedAt(Date.now());
-      setStatus(navigator.onLine === false ? 'offline' : 'synced');
-    } catch {
-      setStatus(navigator.onLine === false ? 'offline' : 'error');
-    } finally {
-      isPushingRef.current = false;
-      if (hasPendingPushRef.current) {
-        hasPendingPushRef.current = false;
-        window.setTimeout(() => void push(), 50);
+  const push = useCallback(
+    async (opts?: { force?: boolean }): Promise<void> => {
+      const currentUser = userRef.current;
+      if (!supabase || !currentUser) return;
+      if (isPushingRef.current) {
+        hasPendingPushRef.current = true;
+        return;
       }
-    }
-  }, []);
+      if (isPullingRef.current && !opts?.force) return;
+
+      const currentState = stateRef.current;
+      const currentFp = getFingerprint(currentState);
+      if (!currentFp) return;
+
+      if (!opts?.force) {
+        if (
+          currentFp === lastPushedFpRef.current ||
+          currentFp === lastPulledFpRef.current
+        ) {
+          return;
+        }
+      }
+
+      isPushingRef.current = true;
+      localPushTimestampRef.current = Date.now();
+      setStatus('syncing');
+
+      try {
+        const now = new Date().toISOString();
+        const rows = [
+          {
+            user_id: currentUser.id,
+            collection: 'settings',
+            item_id: 'main',
+            data: currentState.settings,
+            sort_key: 0,
+            updated_at: now,
+          },
+          {
+            user_id: currentUser.id,
+            collection: 'routine',
+            item_id: 'all',
+            data: currentState.routines,
+            sort_key: 0,
+            updated_at: now,
+          },
+          {
+            user_id: currentUser.id,
+            collection: 'workout',
+            item_id: 'all',
+            data: currentState.workouts,
+            sort_key: 0,
+            updated_at: now,
+          },
+          {
+            user_id: currentUser.id,
+            collection: 'custom_exercise',
+            item_id: 'all',
+            data: currentState.customExercises,
+            sort_key: 0,
+            updated_at: now,
+          },
+          {
+            user_id: currentUser.id,
+            collection: 'measurement',
+            item_id: 'all',
+            data: currentState.measurements,
+            sort_key: 0,
+            updated_at: now,
+          },
+        ];
+
+        console.log('[Tatagan Cloud] Enviando dados para o Supabase...', {
+          userId: currentUser.id,
+          rotinas: currentState.routines.length,
+          treinos: currentState.workouts.length,
+        });
+
+        const { error } = await supabase
+          .from(SYNC_TABLE)
+          .upsert(rows, { onConflict: 'user_id,collection,item_id' });
+
+        if (error) {
+          console.error('[Tatagan Cloud] Erro no envio (push):', error);
+          throw error;
+        }
+
+        console.log('[Tatagan Cloud] Dados salvos com sucesso na nuvem!');
+        lastPushedFpRef.current = currentFp;
+        setLastError(null);
+        setLastSyncedAt(Date.now());
+        setStatus(navigator.onLine === false ? 'offline' : 'synced');
+      } catch (err: any) {
+        console.error('[Tatagan Cloud] Falha no push:', err);
+        setLastError(err?.message || 'Falha ao salvar na nuvem.');
+        setStatus(navigator.onLine === false ? 'offline' : 'error');
+      } finally {
+        isPushingRef.current = false;
+        if (hasPendingPushRef.current) {
+          hasPendingPushRef.current = false;
+          window.setTimeout(() => void push(), 100);
+        }
+      }
+    },
+    []
+  );
 
   // ---------- PULL (Cloud -> Local) ----------
   const pull = useCallback(
-    async (opts?: { isInitial?: boolean }): Promise<void> => {
+    async (opts?: { force?: boolean; isInitial?: boolean }): Promise<void> => {
       const currentUser = userRef.current;
       if (!supabase || !currentUser) return;
-      if (isPullingRef.current) return;
+      if (isPullingRef.current && !opts?.force) return;
 
       isPullingRef.current = true;
       setStatus('syncing');
 
       try {
+        console.log('[Tatagan Cloud] Buscando dados do Supabase...', {
+          userId: currentUser.id,
+        });
+
         const { data, error } = await supabase
           .from(SYNC_TABLE)
-          .select('collection, item_id, data')
+          .select('collection, item_id, data, updated_at')
           .eq('user_id', currentUser.id);
 
-        if (error) throw error;
+        if (error) {
+          console.error('[Tatagan Cloud] Erro na busca (pull):', error);
+          throw error;
+        }
 
-        // Se for o primeiro login e o banco estiver vazio, faz upload dos dados locais (migração transparente)
+        console.log(
+          '[Tatagan Cloud] Dados recebidos do Supabase:',
+          data?.length || 0,
+          'registros'
+        );
+
+        // Se for o primeiro login e o banco estiver 100% vazio, faz upload dos dados locais para inicializar a conta
         if (opts?.isInitial && (!data || data.length === 0)) {
+          console.log(
+            '[Tatagan Cloud] Banco na nuvem vazio para esta conta. Inicializando com dados locais...'
+          );
           isPullingRef.current = false;
-          void push();
+          void push({ force: true });
           return;
         }
 
@@ -262,20 +296,24 @@ export function useSupabaseSync({
             .filter((r) => r.collection === 'workout' && r.item_id !== 'all')
             .map((r) => r.data as CompletedWorkout);
 
+          const remoteRoutines = routineRow
+            ? (routineRow.data as Routine[])
+            : legacyRoutines.length > 0
+            ? legacyRoutines
+            : seedStateRef.current.routines;
+
+          const remoteWorkouts = workoutRow
+            ? (workoutRow.data as CompletedWorkout[])
+            : legacyWorkouts.length > 0
+            ? legacyWorkouts
+            : seedStateRef.current.workouts;
+
           const remoteState: SyncState = {
             settings:
               (settingsRow?.data as SyncedSettings) ||
               seedStateRef.current.settings,
-            routines:
-              (routineRow?.data as Routine[]) ||
-              (legacyRoutines.length > 0
-                ? legacyRoutines
-                : seedStateRef.current.routines),
-            workouts:
-              (workoutRow?.data as CompletedWorkout[]) ||
-              (legacyWorkouts.length > 0
-                ? legacyWorkouts
-                : seedStateRef.current.workouts),
+            routines: remoteRoutines,
+            workouts: remoteWorkouts,
             customExercises:
               (customRow?.data as Exercise[]) ||
               seedStateRef.current.customExercises,
@@ -287,17 +325,31 @@ export function useSupabaseSync({
           const remoteFp = getFingerprint(remoteState);
           const currentLocalFp = getFingerprint(stateRef.current);
 
-          // Aplica os dados remotos apenas se forem diferentes do estado local atual
-          if (remoteFp && remoteFp !== currentLocalFp) {
+          // Aplica dados da nuvem se forem diferentes ou se for pull forçado
+          if (opts?.force || (remoteFp && remoteFp !== currentLocalFp)) {
+            console.log(
+              '[Tatagan Cloud] Aplicando dados da nuvem ao aparelho!',
+              {
+                rotinas: remoteState.routines.length,
+                treinos: remoteState.workouts.length,
+              }
+            );
             lastPulledFpRef.current = remoteFp;
             lastPushedFpRef.current = remoteFp;
             applyRef.current(remoteState);
+          } else {
+            console.log(
+              '[Tatagan Cloud] Aparelho já está alinhado com a nuvem.'
+            );
           }
         }
 
+        setLastError(null);
         setLastSyncedAt(Date.now());
         setStatus(navigator.onLine === false ? 'offline' : 'synced');
-      } catch {
+      } catch (err: any) {
+        console.error('[Tatagan Cloud] Falha no pull:', err);
+        setLastError(err?.message || 'Falha ao baixar da nuvem.');
         setStatus(navigator.onLine === false ? 'offline' : 'error');
       } finally {
         isPullingRef.current = false;
@@ -319,34 +371,44 @@ export function useSupabaseSync({
         channelRef.current = null;
       }
 
-      // Realiza o primeiro pull limpo
-      void pull({ isInitial: true });
+      // Realiza o primeiro pull limpo da nuvem com force=true
+      void pull({ force: true, isInitial: true });
 
-      // Configura canal em tempo real (com filtro de eco local)
+      // Configura canal em tempo real para sincronização instantânea
       channelRef.current = supabase
-        .channel(`tatagan-realtime-${nextUser.id}`)
+        .channel(`tatagan-realtime-${nextUser.id}-${Date.now()}`)
         .on(
           'postgres_changes',
           {
             event: '*',
             schema: 'public',
             table: SYNC_TABLE,
-            filter: `user_id=eq.${nextUser.id}`,
           },
-          () => {
-            // Se o próprio cliente acabou de enviar alterações (menos de 2.5s), ignora o eco!
-            if (Date.now() - localPushTimestampRef.current < 2500) {
+          (payload) => {
+            const newRow = payload.new as { user_id?: string } | undefined;
+            const oldRow = payload.old as { user_id?: string } | undefined;
+            const rowUid = newRow?.user_id || oldRow?.user_id;
+
+            // Só processa evento se pertencer a este usuário
+            if (rowUid && rowUid !== nextUser.id) return;
+
+            // Se o próprio cliente acabou de enviar alterações (menos de 2s), ignora o eco
+            if (Date.now() - localPushTimestampRef.current < 2000) {
               return;
             }
 
-            // Notificação vinda de outro dispositivo (celular <-> computador): puxa de forma suave e com debounce
+            console.log(
+              '[Tatagan Cloud] Atualização recebida via Realtime de outro dispositivo!'
+            );
             if (pullTimerRef.current) clearTimeout(pullTimerRef.current);
             pullTimerRef.current = window.setTimeout(() => {
-              void pull();
-            }, 600);
+              void pull({ force: true });
+            }, 300);
           }
         )
-        .subscribe();
+        .subscribe((subStatus) => {
+          console.log('[Tatagan Cloud] Status Realtime:', subStatus);
+        });
     },
     [pull]
   );
@@ -360,6 +422,7 @@ export function useSupabaseSync({
     setUser(null);
     lastPushedFpRef.current = '';
     lastPulledFpRef.current = '';
+    setLastError(null);
     setStatus(isSupabaseConfigured ? 'signed-out' : 'disabled');
   }, []);
 
@@ -400,34 +463,35 @@ export function useSupabaseSync({
     };
   }, [startSession, stopSession]);
 
-  // ---------- AUTO-PUSH ON STATE CHANGE (Debounce rápido de 700ms) ----------
+  // ---------- AUTO-PUSH ON STATE CHANGE (Debounce de 600ms) ----------
   useEffect(() => {
     if (!user) return;
 
     if (pushTimerRef.current) clearTimeout(pushTimerRef.current);
     pushTimerRef.current = window.setTimeout(() => {
       void push();
-    }, 700);
+    }, 600);
 
     return () => {
       if (pushTimerRef.current) clearTimeout(pushTimerRef.current);
     };
   }, [state, user, push]);
 
-  // ---------- LISTENERS DE REDE, FOCO & UNLOAD ----------
+  // ---------- LISTENERS DE REDE, FOCO & UNLOAD + POLLING DE SEGURANÇA ----------
   useEffect(() => {
     if (!user) return;
 
     const handleFocusOrVisible = () => {
       if (document.visibilityState === 'visible') {
-        if (Date.now() - (lastSyncedAt || 0) > 30000) {
-          void pull();
-        }
+        console.log(
+          '[Tatagan Cloud] Aba focada / tela desbloqueada: sincronizando dados...'
+        );
+        void pull({ force: true });
       } else if (document.visibilityState === 'hidden') {
         // Ao minimizar ou trocar de aba no smartphone/PC, envia pendências
         const currentFp = getFingerprint(stateRef.current);
         if (currentFp && currentFp !== lastPushedFpRef.current) {
-          void push();
+          void push({ force: true });
         }
       }
     };
@@ -435,16 +499,23 @@ export function useSupabaseSync({
     const handleBeforeUnload = () => {
       const currentFp = getFingerprint(stateRef.current);
       if (currentFp && currentFp !== lastPushedFpRef.current) {
-        void push();
+        void push({ force: true });
       }
     };
 
     const handleOnline = () => {
       setStatus('syncing');
-      void push().then(() => pull());
+      void pull({ force: true }).then(() => void push());
     };
 
     const handleOffline = () => setStatus('offline');
+
+    // Intervalo de segurança a cada 10s para pegar alterações mesmo se o WebSocket falhar no mobile
+    const pollInterval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void pull();
+      }
+    }, 10000);
 
     window.addEventListener('focus', handleFocusOrVisible);
     document.addEventListener('visibilitychange', handleFocusOrVisible);
@@ -453,13 +524,14 @@ export function useSupabaseSync({
     window.addEventListener('offline', handleOffline);
 
     return () => {
+      clearInterval(pollInterval);
       window.removeEventListener('focus', handleFocusOrVisible);
       document.removeEventListener('visibilitychange', handleFocusOrVisible);
       window.removeEventListener('beforeunload', handleBeforeUnload);
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [user, lastSyncedAt, pull, push]);
+  }, [user, pull, push]);
 
   // ==================== AUTH PUBLIC METHODS ====================
 
@@ -524,7 +596,7 @@ export function useSupabaseSync({
   const signOut = async () => {
     if (!supabase) return;
     try {
-      await push();
+      await push({ force: true });
     } catch {
       // ignora falha de envio ao sair
     }
@@ -557,8 +629,8 @@ export function useSupabaseSync({
   };
 
   const syncNow = async () => {
-    await push();
-    await pull();
+    await pull({ force: true });
+    await push({ force: true });
   };
 
   return {
@@ -567,6 +639,7 @@ export function useSupabaseSync({
     user,
     status,
     lastSyncedAt,
+    lastError,
     recoveryMode,
     setRecoveryMode,
     signIn,
@@ -575,5 +648,7 @@ export function useSupabaseSync({
     requestPasswordReset,
     updatePassword,
     syncNow,
+    pushToCloud: () => push({ force: true }),
+    pullFromCloud: () => pull({ force: true }),
   };
 }

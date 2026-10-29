@@ -23,6 +23,8 @@ export interface AuthModalProps {
   status: SyncStatus;
   configured: boolean;
   lastSyncedAt: number | null;
+  lastError?: string | null;
+  routinesCount?: number;
   onClose: () => void;
   onLogin: (
     email: string,
@@ -38,6 +40,8 @@ export interface AuthModalProps {
   ) => Promise<{ ok: boolean; error?: string; info?: string }>;
   onLogout: () => void | Promise<void>;
   onForceSync: () => Promise<void>;
+  onPushToCloud?: () => Promise<void>;
+  onPullFromCloud?: () => Promise<void>;
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({
@@ -45,12 +49,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   status,
   configured,
   lastSyncedAt,
+  lastError,
+  routinesCount,
   onClose,
   onLogin,
   onRegister,
   onRequestPasswordReset,
   onLogout,
   onForceSync,
+  onPushToCloud,
+  onPullFromCloud,
 }) => {
   const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
   const [email, setEmail] = useState('');
@@ -456,14 +464,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               ) : status === 'error' ? (
                 <>
                   <AlertCircle size={15} color="var(--hevy-red)" />
-                  <span>Erro ao sincronizar. Verifique a internet e tente novamente.</span>
+                  <span style={{ color: 'var(--hevy-red)' }}>
+                    {lastError
+                      ? `Erro: ${lastError}`
+                      : 'Erro ao sincronizar. Verifique a internet e tente novamente.'}
+                  </span>
                 </>
               ) : (
                 <>
                   <CheckCircle2 size={15} color="var(--hevy-green)" />
                   <span>
-                    Sincronização em tempo real ativa. Rotinas e treinos
-                    atualizam automaticamente no celular e no computador.
+                    Sincronização ativa. {routinesCount !== undefined ? `${routinesCount} rotinas neste aparelho.` : ''} Dados na nuvem.
                   </span>
                 </>
               )}
@@ -480,11 +491,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               instantaneamente no celular, e vice-versa.
             </p>
 
-            <div style={{ display: 'flex', gap: 10 }}>
+            {/* Quick Sync & Directional Actions */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <button
                 type="button"
                 className="hevy-btn-primary"
-                style={{ flex: 1 }}
+                style={{ width: '100%', padding: '12px' }}
                 disabled={status === 'syncing'}
                 onClick={onForceSync}
               >
@@ -499,8 +511,44 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 />
                 {status === 'syncing'
                   ? 'Sincronizando...'
-                  : 'Sincronizar Agora'}
+                  : 'Sincronizar Tudo (Auto)'}
               </button>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                {onPullFromCloud && (
+                  <button
+                    type="button"
+                    className="hevy-btn-secondary"
+                    style={{ fontSize: 12, padding: '10px 8px' }}
+                    disabled={status === 'syncing'}
+                    onClick={async () => {
+                      await onPullFromCloud();
+                      setInfoMsg('Dados baixados da nuvem!');
+                      setTimeout(() => setInfoMsg(null), 3000);
+                    }}
+                    title="Baixar as rotinas salvas na nuvem para este aparelho"
+                  >
+                    ⬇️ Baixar da Nuvem
+                  </button>
+                )}
+
+                {onPushToCloud && (
+                  <button
+                    type="button"
+                    className="hevy-btn-secondary"
+                    style={{ fontSize: 12, padding: '10px 8px' }}
+                    disabled={status === 'syncing'}
+                    onClick={async () => {
+                      await onPushToCloud();
+                      setInfoMsg('Dados deste aparelho salvos na nuvem!');
+                      setTimeout(() => setInfoMsg(null), 3000);
+                    }}
+                    title="Enviar as rotinas deste aparelho para a nuvem"
+                  >
+                    ⬆️ Subir para Nuvem
+                  </button>
+                )}
+              </div>
 
               <button
                 type="button"
@@ -508,6 +556,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 style={{
                   color: 'var(--hevy-red)',
                   borderColor: 'rgba(255,75,75,0.3)',
+                  marginTop: 4,
+                  padding: '10px',
                 }}
                 onClick={async () => {
                   await onLogout();
