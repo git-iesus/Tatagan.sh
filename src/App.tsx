@@ -4774,15 +4774,6 @@ export const App: React.FC = () => {
           />
         )}
 
-        {inspectExercise && (
-          <ExerciseDetailModal
-            exercise={inspectExercise}
-            workouts={workouts}
-            onClose={() => setInspectExercise(null)}
-            onAddToActiveWorkout={addExerciseToActiveWorkout}
-          />
-        )}
-
         {pickerTarget && (
           <ExercisePickerModal
             exercises={allExercises}
@@ -4835,6 +4826,62 @@ export const App: React.FC = () => {
                   ],
                 });
                 setPickerTarget(null);
+              }
+            }}
+          />
+        )}
+
+        {inspectExercise && (
+          <ExerciseDetailModal
+            exercise={inspectExercise}
+            workouts={workouts}
+            onClose={() => setInspectExercise(null)}
+            onAddToActiveWorkout={(ex) => {
+              if (pickerTarget === 'routine' && buildingRoutine) {
+                setBuildingRoutine({
+                  ...buildingRoutine,
+                  exercises: [
+                    ...buildingRoutine.exercises,
+                    {
+                      id: `re-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                      exerciseId: ex.id,
+                      notes: '',
+                      restTimerSeconds: DEFAULT_REST_SECONDS,
+                      supersetGroup: null,
+                      sets: [
+                        {
+                          id: `rs-1-${Date.now()}`,
+                          type: 'normal',
+                          weightKg: 0,
+                          reps: 10,
+                          rpe: 8,
+                          completed: false,
+                        },
+                        {
+                          id: `rs-2-${Date.now()}`,
+                          type: 'normal',
+                          weightKg: 0,
+                          reps: 10,
+                          rpe: 8.5,
+                          completed: false,
+                        },
+                        {
+                          id: `rs-3-${Date.now()}`,
+                          type: 'normal',
+                          weightKg: 0,
+                          reps: 10,
+                          rpe: 9,
+                          completed: false,
+                        },
+                      ],
+                    },
+                  ],
+                });
+                setPickerTarget(null);
+                setInspectExercise(null);
+              } else {
+                addExerciseToActiveWorkout(ex);
+                setInspectExercise(null);
               }
             }}
           />

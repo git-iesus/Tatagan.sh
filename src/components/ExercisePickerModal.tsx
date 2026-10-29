@@ -77,7 +77,7 @@ export const ExercisePickerModal: React.FC<ExercisePickerModalProps> = ({
   };
 
   return (
-    <div className="hevy-modal-backdrop" onClick={onClose}>
+    <div className="hevy-modal-backdrop" onClick={onClose} style={{ zIndex: 70 }}>
       <div
         className="hevy-modal-sheet"
         onClick={(e) => e.stopPropagation()}

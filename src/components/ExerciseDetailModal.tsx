@@ -58,7 +58,7 @@ export const ExerciseDetailModal: React.FC<ExerciseDetailModalProps> = ({
     : [];
 
   return (
-    <div className="hevy-modal-backdrop" onClick={onClose}>
+    <div className="hevy-modal-backdrop" onClick={onClose} style={{ zIndex: 100 }}>
       <div
         className="hevy-modal-sheet"
         onClick={(e) => e.stopPropagation()}
